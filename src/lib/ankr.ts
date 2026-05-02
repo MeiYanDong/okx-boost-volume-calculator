@@ -1,4 +1,5 @@
 import { normalizeAddress } from "./chains";
+import { serverAccessHeaders } from "./serverAccess";
 import type { ChainConfig } from "./types";
 
 const METHOD = "ankr_getTransactionsByAddress";
@@ -94,10 +95,10 @@ async function fetchAnkrPage(params: {
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    headers: serverAccessHeaders({
       accept: "application/json",
       "content-type": "application/json",
-    },
+    }),
     body: JSON.stringify({
       id: 1,
       jsonrpc: "2.0",

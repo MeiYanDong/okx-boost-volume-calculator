@@ -1,4 +1,5 @@
 import { normalizeAddress, tokenSymbolFromConfig, withTokenGroup } from "./chains";
+import { serverAccessHeaders } from "./serverAccess";
 import type { ChainConfig, TokenMeta } from "./types";
 
 const RPC_REQUEST_TIMEOUT_MS = 25_000;
@@ -55,14 +56,14 @@ export class RpcClient {
     try {
       const response = await fetch(this.rpcUrl, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: serverAccessHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
         signal: controller.signal,
       });
+      const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(`${method} HTTP ${response.status}`);
+        throw new Error(payload.error || payload.message || `${method} HTTP ${response.status}`);
       }
-      const payload = await response.json();
       if (payload.error) {
         throw new Error(payload.error.message || JSON.stringify(payload.error));
       }

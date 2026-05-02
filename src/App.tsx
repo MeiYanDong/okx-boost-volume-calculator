@@ -1,10 +1,11 @@
-import { AlertCircle, CalendarDays, CheckCircle2, Database, Gauge, Info, Rocket, RotateCcw, Search, Wallet } from "lucide-react";
+import { AlertCircle, CalendarDays, CheckCircle2, Database, Gauge, Info, LockKeyhole, Rocket, RotateCcw, Search, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { bonusMultiplierFor } from "./lib/boostRules";
 import { BSC_CHAIN, normalizeAddress } from "./lib/chains";
 import { calculateBoostVolume, latestSelectableUtcDate, parseBoostOverrides } from "./lib/calculator";
 import { clearOkxBoostCache } from "./lib/cache";
 import { formatNumber, formatUsd, shortHash } from "./lib/format";
+import { readServerAccessPassword, writeServerAccessPassword } from "./lib/serverAccess";
 import type { CalculationResult, TokenGroup, TokenMeta } from "./lib/types";
 
 const SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
@@ -25,6 +26,7 @@ export default function App() {
   const [initialUiState] = useState(readPersistedUiState);
   const [address, setAddress] = useState(initialUiState.address || SAMPLE_WALLET);
   const [endDate, setEndDate] = useState(initialUiState.endDate || maxSnapshotDate);
+  const [accessPassword, setAccessPassword] = useState(readServerAccessPassword);
   const [boostOverrides, setBoostOverrides] = useState(initialUiState.boostOverrides || "");
   const [progress, setProgress] = useState("准备读取钱包交易记录");
   const [state, setState] = useState<RunState>("idle");
@@ -34,6 +36,10 @@ export default function App() {
   useEffect(() => {
     writePersistedUiState({ address, endDate, boostOverrides });
   }, [address, endDate, boostOverrides]);
+
+  useEffect(() => {
+    writeServerAccessPassword(accessPassword);
+  }, [accessPassword]);
 
   useEffect(() => {
     const saved = readPersistedResult(address, endDate);
@@ -120,6 +126,20 @@ export default function App() {
               onChange={(event) => setEndDate(event.target.value)}
             />
             <small>包含当天；今天可选，未结束时按当前链上区块预估</small>
+          </label>
+
+          <label className="field private-field">
+            <span>
+              <LockKeyhole size={16} /> 私有访问码
+            </span>
+            <input
+              type="password"
+              value={accessPassword}
+              onChange={(event) => setAccessPassword(event.target.value)}
+              placeholder="私人部署需要时填写"
+              autoComplete="current-password"
+            />
+            <small>本地自用可留空；Vercel 设置访问码后需填写</small>
           </label>
         </div>
 

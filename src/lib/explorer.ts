@@ -1,5 +1,6 @@
 import type { ChainConfig } from "./types";
 import { normalizeAddress } from "./chains";
+import { serverAccessHeaders } from "./serverAccess";
 
 const PAGE_SIZE = 10_000;
 const MAX_PAGES = 20;
@@ -76,8 +77,11 @@ async function fetchAddressTxPage(params: {
   url.searchParams.set("offset", String(PAGE_SIZE));
   url.searchParams.set("apikey", params.apiKey);
 
-  const response = await fetch(url);
-  const payload = (await response.json()) as ExplorerResponse;
+  const response = await fetch(url, { headers: serverAccessHeaders() });
+  const payload = (await response.json().catch(() => ({}))) as ExplorerResponse & { error?: string };
+  if (!response.ok) {
+    throw new Error(payload.error || payload.message || `Explorer API HTTP ${response.status}`);
+  }
   if (!Array.isArray(payload.result)) {
     if (/no transactions found/i.test(payload.result)) return [];
     throw new Error(payload.result || payload.message || "Explorer API returned no transactions");

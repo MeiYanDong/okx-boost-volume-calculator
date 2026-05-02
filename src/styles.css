@@ -94,7 +94,7 @@ h1 {
 }
 
 .control-grid.compact {
-  grid-template-columns: minmax(320px, 1fr) minmax(220px, 320px);
+  grid-template-columns: minmax(320px, 1fr) minmax(220px, 300px) minmax(220px, 280px);
 }
 
 .field {
@@ -150,6 +150,10 @@ h1 {
   margin-top: 10px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.private-field input {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
 }
 
 .scope-strip,
