@@ -48,7 +48,7 @@ export async function handleAnkrProxy(request, response, config) {
 
   validateAccess(request, config);
   if (!config.ankrMultichainRpcUrl) {
-    sendJson(response, 200, jsonRpcError("Ankr Advanced API is not configured"));
+    sendJson(response, 200, jsonRpcError("Ankr Advanced API is not configured"), { "cache-control": "no-store" });
     return;
   }
 

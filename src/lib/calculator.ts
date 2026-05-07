@@ -161,7 +161,9 @@ async function discoverOkxHashes(params: {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      params.warnings.push(`Ankr Advanced API 读取失败，已尝试下一个来源：${message}`);
+      if (!/Ankr Advanced API is not configured/i.test(message)) {
+        params.warnings.push(`Ankr Advanced API 读取失败，已尝试下一个来源：${message}`);
+      }
     }
   }
 
