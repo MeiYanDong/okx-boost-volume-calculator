@@ -1,31 +1,88 @@
 # Vercel 私人部署交接说明
 
-这份说明给操作项目的 Agent 看。目标是把 OKX Boost 交易量计算器部署成私人可用的 Vercel 版本，不公开暴露付费 RPC 或 API Key。
+这份文档给操作项目的 Agent 看。目标是把 OKX Boost 钱包总览工具部署成私人可用的 Vercel 版本，同时保护 Ankr、Chainstack、Explorer 和访问密码。
 
 ## 部署目标
 
-- 前端页面部署到 Vercel。
-- 链上数据请求通过 Vercel API Functions 转发。
-- Ankr、Etherscan、BSC RPC 等密钥只保存在 Vercel 环境变量中。
-- 如果设置了访问码，用户必须在页面的“私有访问码”里填写后才能扫描。
+1. 前端页面部署到 Vercel。
+2. `/api/rpc`、`/api/ankr`、`/api/explorer` 通过 Vercel Functions 转发。
+3. 所有付费服务地址和密钥只放在 Vercel 环境变量里。
+4. 如果设置了 `ACCESS_PASSWORD`，用户必须在页面的钱包导入面板里填写私有访问码，扫描接口才会工作。
+5. 生产站可以给少数可信用户使用，但不应公开传播。
 
-## Agent 需要做什么
+## 环境变量职责
 
-1. 在 Vercel 中创建或关联这个 GitHub 项目。
-2. 在 Vercel Project Settings 的 Environment Variables 中配置：
-   - `ANKR_MULTICHAIN_RPC_URL`
-   - `ETHERSCAN_API_KEY`
-   - `BSC_RPC_URL`
-   - `ACCESS_PASSWORD`
-3. 部署 Preview，打开页面做一次真实钱包扫描。
-4. 确认页面可以读取 BNB Chain OKX 聚合交易，且结果能正常展示。
-5. 确认不填写“私有访问码”时，扫描会被拒绝；填写正确访问码后，扫描可以继续。
-6. Preview 没问题后，再提升为 Production。
+必须理解这些变量的分工：
+
+| 变量 | 作用 | 建议 |
+| --- | --- | --- |
+| `ANKR_MULTICHAIN_RPC_URL` | Ankr Advanced 钱包交易索引，用来快速发现钱包 OKX 交易 hash | 优先配置 |
+| `BSC_RPC_URL` | BNB Chain 标准 RPC，用来查区块、交易、receipt、logs、token 信息 | 建议用 Chainstack |
+| `ETHERSCAN_API_KEY` | Explorer 钱包交易索引备选 | 可选；免费计划可能不支持 BSC |
+| `ACCESS_PASSWORD` | 私人访问码，保护 API 额度 | 私人部署必须配置 |
+
+推荐链路：
+
+```text
+Ankr：负责找交易
+Chainstack：负责解析交易和 RPC 兜底
+Explorer：备选索引，不作为主依赖
+```
+
+## Agent 部署步骤
+
+1. 确认当前目录已经关联正确的 Vercel 项目。
+2. 检查 Vercel Production、Preview、Development 三套环境变量是否都有必要变量。
+3. 如果变量缺失，补齐项目级环境变量，不要把密钥写进代码或文档。
+4. 本地先运行类型检查和生产构建。
+5. 发起 Vercel Production 部署。
+6. 部署完成后记录生产 URL。
+7. 做 API 保护验证。
+8. 做 Ankr 钱包索引验证。
+9. 做页面加载验证。
+
+## 验证标准
+
+部署完成后，至少完成这些检查：
+
+1. 生产页面可以打开。
+2. 不带访问码请求 `/api/rpc` 会返回拒绝访问。
+3. 带正确访问码请求 `/api/ankr` 能返回 BSC 钱包交易索引结果。
+4. 带正确访问码请求 `/api/rpc` 能返回最新区块。
+5. 页面能正常进入钱包总览。
+6. 页面不会要求用户填写 Ankr、Chainstack 或 Etherscan 密钥。
 
 ## 私人部署边界
 
 这个版本适合本人或少数可信用户使用。
 
-不要把没有访问保护的链接公开发布，因为别人可以消耗部署者的 Ankr、Etherscan 或 RPC 额度。
+不要公开发布没有访问保护的链接。公开后，别人可以消耗你的 Ankr、Chainstack 或 Explorer 额度。
 
-如果要公开给大量用户使用，下一步应该增加账号登录、限流、服务端缓存和使用日志。
+如果要公开给大量用户使用，下一阶段必须增加：
+
+1. 登录账号。
+2. 用户级限流。
+3. 服务端缓存。
+4. 扫描任务队列。
+5. 使用日志。
+6. 额度监控。
+
+## 常见问题
+
+### 为什么有 Chainstack 还要 Ankr？
+
+Chainstack 是标准 RPC，适合解析交易和兜底扫 logs；Ankr Advanced 提供钱包交易索引，适合快速找到某个钱包的交易 hash。
+
+两者不是二选一。最优组合是 Ankr 找交易，Chainstack 解析交易。
+
+### 为什么 Explorer 会失败？
+
+当前 Etherscan V2 免费 API 可能不支持 BSC 全链覆盖。如果页面提示 Explorer 失败，只要 Ankr 或 RPC 兜底成功，结果仍可继续计算。
+
+### 为什么今天会提示实时预估？
+
+如果快照日期是今天，UTC 今天还没结束，工具只能扫描到当前最新区块。后面继续交易会改变结果。
+
+### 为什么刷新比重扫快？
+
+刷新会使用本地归档和 `scannedToBlock`，只补扫新区块。重扫会重建整个 10 天窗口。

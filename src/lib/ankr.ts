@@ -52,14 +52,17 @@ export async function fetchAnkrAddressOkxHashes(params: {
 
     const transactions = payload.result?.transactions || [];
     for (const tx of transactions) {
+      const blockNumber = parseBlockNumber(tx.blockNumber);
+      if (blockNumber !== undefined && blockNumber < params.startBlock) {
+        return [...hashes];
+      }
+      if (blockNumber !== undefined && blockNumber > params.endBlock) continue;
+
       const timestamp = parseTimestamp(tx.timestamp);
       if (timestamp !== undefined && timestamp < params.startSeconds) {
         return [...hashes];
       }
       if (timestamp !== undefined && timestamp >= params.endSeconds) continue;
-
-      const blockNumber = parseBlockNumber(tx.blockNumber);
-      if (blockNumber !== undefined && (blockNumber < params.startBlock || blockNumber > params.endBlock)) continue;
 
       const hash = tx.hash || "";
       if (!/^0x[a-fA-F0-9]{64}$/.test(hash)) continue;

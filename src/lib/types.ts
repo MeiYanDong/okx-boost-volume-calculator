@@ -1,5 +1,6 @@
 export type TokenGroup = "group1" | "group2" | "other";
 export type ExplorerApiStyle = "etherscan-v2" | "etherscan-legacy";
+export type TxDiscoverySource = "archive" | "import" | "ankr" | "explorer" | "rpc";
 
 export type WalletTransaction = {
   hash: string;
@@ -79,6 +80,11 @@ export type CalculationResult = {
   swaps: ParsedSwap[];
   warnings: string[];
   txHashes: string[];
+  scannedFromBlock?: number;
+  scannedToBlock?: number;
+  incrementalFromBlock?: number;
+  incrementalNewTxCount?: number;
+  txDiscoverySource?: TxDiscoverySource;
 };
 
 export type CalculateInput = {
@@ -89,6 +95,10 @@ export type CalculateInput = {
   rpcUrl?: string;
   ankrMultichainRpcUrl?: string;
   walletTransactions?: WalletTransaction[];
+  forceRefresh?: boolean;
+  incrementalRefresh?: boolean;
+  previousResult?: CalculationResult;
+  reorgSafetyBlocks?: number;
   boostBonuses: Record<string, number>;
   onProgress?: (message: string) => void;
 };

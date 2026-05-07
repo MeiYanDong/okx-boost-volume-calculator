@@ -13,9 +13,10 @@ import { fetchAddressOkxHashes } from "./explorer";
 import { parseOkxSwap } from "./parser";
 import { RpcClient } from "./rpc";
 import { fetchWalletOkxHashesByRpc } from "./rpcScan";
-import type { CalculateInput, CalculationResult, ChainConfig, DailyBoostRow, WalletTransaction } from "./types";
+import type { CalculateInput, CalculationResult, ChainConfig, DailyBoostRow, TxDiscoverySource, WalletTransaction } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_REORG_SAFETY_BLOCKS = 200;
 
 export async function calculateBoostVolume(input: CalculateInput): Promise<CalculationResult> {
   if (!isAddress(input.address)) {
@@ -45,35 +46,80 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     warnings.push(`快照日期 ${input.endDate} 尚未结束，当前结果扫描到最新区块 ${latestBlock}，属于实时预估。`);
   }
 
-  const txHashesKey = txHashesCacheKey({ chain: input.chain, address, startBlock, endBlock });
-  const canUseTxHashesCache = !input.walletTransactions?.length;
-  const cachedTxHashes = canUseTxHashesCache ? readTxHashesCache(txHashesKey) : null;
-  const txHashes =
-    cachedTxHashes ||
-    (await discoverOkxHashes({
-      input,
-      rpc,
-      address,
-      startBlock,
-      endBlock,
-      startSeconds,
-      endSeconds,
-      warnings,
-    }));
+  const previousResult = input.previousResult;
+  const previousScannedToBlock = previousResult?.scannedToBlock;
+  const hasCompatiblePrevious =
+    previousResult !== undefined &&
+    previousResult.windowStart === days[0] &&
+    previousResult.windowEnd === days[days.length - 1] &&
+    typeof previousScannedToBlock === "number";
+  const canIncrementalRefresh =
+    Boolean(input.incrementalRefresh) &&
+    !input.forceRefresh &&
+    !input.walletTransactions?.length &&
+    hasCompatiblePrevious;
+  const reorgSafetyBlocks = input.reorgSafetyBlocks ?? DEFAULT_REORG_SAFETY_BLOCKS;
+  const scanStartBlock = canIncrementalRefresh
+    ? Math.min(endBlock, Math.max(startBlock, previousScannedToBlock! - reorgSafetyBlocks))
+    : startBlock;
 
-  if (cachedTxHashes) {
-    input.onProgress?.(`命中窗口缓存：${cachedTxHashes.length} 个候选 hash`);
-  } else if (canUseTxHashesCache) {
-    writeTxHashesCache(txHashesKey, txHashes);
+  if (canIncrementalRefresh && endBlock <= previousScannedToBlock!) {
+    input.onProgress?.(`归档已覆盖最新区块 ${endBlock}，无需读取链上交易`);
+    return {
+      ...previousResult!,
+      warnings,
+      scannedFromBlock: previousResult!.scannedFromBlock ?? startBlock,
+      scannedToBlock: previousScannedToBlock,
+      incrementalFromBlock: endBlock,
+      incrementalNewTxCount: 0,
+      txDiscoverySource: "archive",
+    };
   }
 
-  const swaps = [];
-  for (let index = 0; index < txHashes.length; index += 1) {
-    const hash = txHashes[index];
-    input.onProgress?.(`解析交易 ${index + 1}/${txHashes.length}: ${hash.slice(0, 10)}...`);
+  const txHashesKey = txHashesCacheKey({ chain: input.chain, address, startBlock: scanStartBlock, endBlock });
+  const canUseTxHashesCache = !input.forceRefresh && !input.walletTransactions?.length;
+  const cachedTxHashes = canUseTxHashesCache ? readTxHashesCache(txHashesKey) : null;
+  const discovery = cachedTxHashes
+    ? { hashes: cachedTxHashes, source: "archive" as TxDiscoverySource }
+    : await discoverOkxHashes({
+        input,
+        rpc,
+        address,
+        startBlock: scanStartBlock,
+        endBlock,
+        startSeconds,
+        endSeconds,
+        warnings,
+      });
+  const discoveredTxHashes = discovery.hashes;
+
+  if (cachedTxHashes) {
+    input.onProgress?.(`命中区块缓存：${cachedTxHashes.length} 个候选 hash`);
+  } else if (canUseTxHashesCache) {
+    writeTxHashesCache(txHashesKey, discoveredTxHashes);
+  }
+
+  const previousHashes = new Set((canIncrementalRefresh ? previousResult!.txHashes : []).map((hash) => normalizeAddress(hash)));
+  const txHashesToParse = canIncrementalRefresh
+    ? discoveredTxHashes.filter((hash) => !previousHashes.has(normalizeAddress(hash)))
+    : discoveredTxHashes;
+  const txHashes = mergeTxHashes(canIncrementalRefresh ? previousResult!.txHashes : [], txHashesToParse);
+  const swaps = canIncrementalRefresh
+    ? filterSwapsForWindow(dedupeSwaps(previousResult!.swaps), startSeconds, endSeconds)
+    : [];
+
+  if (canIncrementalRefresh) {
+    input.onProgress?.(
+      `增量扫描区块 ${scanStartBlock}-${endBlock}：候选 ${discoveredTxHashes.length} 笔，新增 ${txHashesToParse.length} 笔`,
+    );
+  }
+
+  for (let index = 0; index < txHashesToParse.length; index += 1) {
+    const hash = txHashesToParse[index];
+    input.onProgress?.(`解析交易 ${index + 1}/${txHashesToParse.length}: ${hash.slice(0, 10)}...`);
     try {
       const swapKey = parsedSwapCacheKey({ chain: input.chain, address, hash, boostBonuses });
-      const cachedSwap = readParsedSwapCache(swapKey);
+      const cachedSwap = input.forceRefresh ? null : readParsedSwapCache(swapKey);
       const swap =
         cachedSwap ||
         (await parseOkxSwap({
@@ -90,6 +136,8 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     }
   }
 
+  const windowSwaps = dedupeSwaps(filterSwapsForWindow(swaps, startSeconds, endSeconds));
+
   const dailyRows = days.map<DailyBoostRow>((date) => ({
     date,
     txCount: 0,
@@ -97,7 +145,7 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     tradeUsd: 0,
   }));
   const dailyMap = new Map(dailyRows.map((row) => [row.date, row]));
-  for (const swap of swaps) {
+  for (const swap of windowSwaps) {
     const row = dailyMap.get(swap.utcDate);
     if (!row) continue;
     row.txCount += swap.status === "counted" ? 1 : 0;
@@ -115,10 +163,43 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     totalBoostVolume,
     totalTradeUsd,
     dailyRows: [...dailyRows].reverse(),
-    swaps: swaps.sort((a, b) => b.timestamp - a.timestamp),
+    swaps: windowSwaps.sort((a, b) => b.timestamp - a.timestamp),
     warnings,
     txHashes,
+    scannedFromBlock: startBlock,
+    scannedToBlock: endBlock,
+    incrementalFromBlock: canIncrementalRefresh ? scanStartBlock : undefined,
+    incrementalNewTxCount: canIncrementalRefresh ? txHashesToParse.length : undefined,
+    txDiscoverySource: discovery.source,
   };
+}
+
+function mergeTxHashes(existing: string[], incoming: string[]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const hash of [...existing, ...incoming]) {
+    const normalized = normalizeAddress(hash);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    merged.push(hash);
+  }
+  return merged;
+}
+
+function filterSwapsForWindow(swaps: CalculationResult["swaps"], startSeconds: number, endSeconds: number): CalculationResult["swaps"] {
+  return swaps.filter((swap) => swap.timestamp >= startSeconds && swap.timestamp < endSeconds);
+}
+
+function dedupeSwaps(swaps: CalculationResult["swaps"]): CalculationResult["swaps"] {
+  const seen = new Set<string>();
+  const deduped: CalculationResult["swaps"] = [];
+  for (const swap of swaps) {
+    const hash = normalizeAddress(swap.hash);
+    if (seen.has(hash)) continue;
+    seen.add(hash);
+    deduped.push(swap);
+  }
+  return deduped;
 }
 
 async function discoverOkxHashes(params: {
@@ -130,7 +211,7 @@ async function discoverOkxHashes(params: {
   startSeconds: number;
   endSeconds: number;
   warnings: string[];
-}): Promise<string[]> {
+}): Promise<{ hashes: string[]; source: TxDiscoverySource }> {
   if (params.input.walletTransactions?.length) {
     params.input.onProgress?.("通过导入的交易记录筛选 OKX Router 交易...");
     const hashes = filterWalletOkxHashes({
@@ -143,13 +224,15 @@ async function discoverOkxHashes(params: {
     if (!hashes.length) {
       params.warnings.push("导入的交易记录没有筛出 OKX Router 候选交易，请确认 CSV 日期范围和钱包地址。");
     }
-    return hashes;
+    return { hashes, source: "import" };
   }
 
   if (params.input.ankrMultichainRpcUrl) {
     try {
-      params.input.onProgress?.("通过 Ankr Advanced API 钱包索引筛选 OKX Router 交易...");
-      return await fetchAnkrAddressOkxHashes({
+      params.input.onProgress?.(
+        `通过 Ankr Advanced 钱包索引筛选 OKX Router 交易，区块 ${params.startBlock}-${params.endBlock}...`,
+      );
+      const hashes = await fetchAnkrAddressOkxHashes({
         chain: params.input.chain,
         rpcUrl: params.input.ankrMultichainRpcUrl,
         address: params.address,
@@ -159,33 +242,43 @@ async function discoverOkxHashes(params: {
         endSeconds: params.endSeconds,
         onProgress: params.input.onProgress,
       });
+      params.input.onProgress?.(`Ankr 钱包索引完成：${hashes.length} 个候选 OKX hash`);
+      return { hashes, source: "ankr" };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/Ankr Advanced API is not configured/i.test(message)) {
         params.warnings.push(`Ankr Advanced API 读取失败，已尝试下一个来源：${message}`);
+        params.input.onProgress?.("Ankr 钱包索引不可用，改用 Explorer 钱包交易索引...");
       }
     }
   }
 
   if (params.input.apiKey) {
     try {
-      params.input.onProgress?.("通过钱包交易记录索引筛选 OKX Router 交易...");
-      return await fetchAddressOkxHashes({
+      params.input.onProgress?.(
+        `通过 Explorer 钱包交易索引筛选 OKX Router 交易，区块 ${params.startBlock}-${params.endBlock}...`,
+      );
+      const hashes = await fetchAddressOkxHashes({
         chain: params.input.chain,
         address: params.address,
         startBlock: params.startBlock,
         endBlock: params.endBlock,
         apiKey: params.input.apiKey,
       });
+      params.input.onProgress?.(`Explorer 钱包索引完成：${hashes.length} 个候选 OKX hash`);
+      return { hashes, source: "explorer" };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      params.warnings.push(`钱包交易记录索引读取失败，已改用 RPC 公开链上记录：${message}`);
+      params.warnings.push(`Explorer 钱包索引读取失败，已尝试 RPC 兜底：${message}`);
+      params.input.onProgress?.("Explorer 钱包索引不可用，最后兜底使用 RPC Transfer 事件...");
     }
   }
 
   try {
-    params.input.onProgress?.("通过 RPC 读取公开链上记录...");
-    return await fetchWalletOkxHashesByRpc({
+    params.input.onProgress?.(
+      `RPC 兜底：读取公开链上 Transfer 事件，区块 ${params.startBlock}-${params.endBlock}...`,
+    );
+    const hashes = await fetchWalletOkxHashesByRpc({
       chain: params.input.chain,
       rpc: params.rpc,
       address: params.address,
@@ -193,6 +286,7 @@ async function discoverOkxHashes(params: {
       endBlock: params.endBlock,
       onProgress: params.input.onProgress,
     });
+    return { hashes, source: "rpc" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`RPC 公开链上记录读取失败：${message}`);
