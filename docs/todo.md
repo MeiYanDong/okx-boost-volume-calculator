@@ -33,6 +33,8 @@
   子 todo：[S13 快照预警与未来 3 天预测](./todos/2026-05-09-snapshot-forecast-alerts.md)
 - [x] S14 移除清理归档入口并增加飞书通知
   子 todo：[S14 清理归档入口移除与飞书通知](./todos/2026-05-09-feishu-notification-cleanup.md)
+- [x] S15 收敛到期交易量文案
+  子 todo：[S15 到期交易量文案收敛](./todos/2026-05-09-expiring-volume-copy.md)
 
 ## 维护规则
 

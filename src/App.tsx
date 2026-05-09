@@ -1447,8 +1447,8 @@ function SnapshotForecastPanel({
                     {index === 0
                       ? "当前窗口"
                       : row.expiredBoostVolume > 0
-                        ? `${row.expiredDate} 到期 ${formatUsd(row.expiredBoostVolume)}`
-                        : `${row.expiredDate} 无到期量`}
+                        ? `到期交易量 ${formatUsd(row.expiredBoostVolume)}`
+                        : "无到期交易量"}
                   </small>
                 </div>
 
@@ -2318,7 +2318,7 @@ function buildFeishuForecastMessage(row: SnapshotForecastRow, targetTotalPerWall
     `单钱包目标：${formatUsd(targetTotalPerWallet)}`,
     `风险钱包：${row.atRiskWallets}/${row.archivedWallets}`,
     `最大差额：${formatUsd(row.worstGap)}`,
-    `到期日期：${row.expiredDate}${row.expiredBoostVolume > 0 ? `，到期量 ${formatUsd(row.expiredBoostVolume)}` : ""}`,
+    `到期交易量：${formatUsd(row.expiredBoostVolume)}`,
     "",
     "需要处理的钱包：",
     riskWallets.length ? riskWallets.join("\n") : "暂无",
