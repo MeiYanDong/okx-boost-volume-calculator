@@ -38,5 +38,5 @@
 - [x] 运行 `npm run build`
 - [x] 本地验证归档接口
 - [x] 本地验证 Cron dry-run 计算模块
-- [ ] 部署到 Vercel
-- [ ] 线上验证稳定链接
+- [x] 部署到 Vercel
+- [x] 线上验证稳定链接
