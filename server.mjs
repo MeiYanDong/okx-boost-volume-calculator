@@ -15,6 +15,8 @@ import {
   sendProxyError,
   warnLegacyEnv,
 } from "./server/proxy.mjs";
+import { handleArchiveApi } from "./server/archiveApi.mjs";
+import { handleDailyRefreshCron } from "./server/cronApi.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const mode = process.env.NODE_ENV === "production" ? "production" : "development";
@@ -58,6 +60,16 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/feishu") {
       await handleFeishuNotify(request, response, config);
+      return;
+    }
+
+    if (url.pathname === "/api/archive") {
+      await handleArchiveApi(request, response, config, env);
+      return;
+    }
+
+    if (url.pathname === "/api/cron/daily-refresh") {
+      await handleDailyRefreshCron(request, response, config, env);
       return;
     }
 

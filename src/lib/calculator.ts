@@ -48,10 +48,14 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
 
   const previousResult = input.previousResult;
   const previousScannedToBlock = previousResult?.scannedToBlock;
-  const hasCompatiblePrevious =
+  const hasSameWindow =
     previousResult !== undefined &&
     previousResult.windowStart === days[0] &&
-    previousResult.windowEnd === days[days.length - 1] &&
+    previousResult.windowEnd === days[days.length - 1];
+  const hasCompatiblePrevious =
+    previousResult !== undefined &&
+    previousResult.windowStart <= days[0] &&
+    previousResult.windowEnd <= days[days.length - 1] &&
     typeof previousScannedToBlock === "number";
   const canIncrementalRefresh =
     Boolean(input.incrementalRefresh) &&
@@ -64,24 +68,30 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     : startBlock;
 
   if (canIncrementalRefresh && endBlock <= previousScannedToBlock!) {
-    input.onProgress?.(`归档已覆盖最新区块 ${endBlock}，无需读取链上交易`);
-    return {
-      ...previousResult!,
-      warnings,
-      scannedFromBlock: previousResult!.scannedFromBlock ?? startBlock,
-      scannedToBlock: previousScannedToBlock,
-      incrementalFromBlock: endBlock,
-      incrementalNewTxCount: 0,
-      txDiscoverySource: "archive",
-    };
+    if (hasSameWindow) {
+      input.onProgress?.(`归档已覆盖最新区块 ${endBlock}，无需读取链上交易`);
+      return {
+        ...previousResult!,
+        warnings,
+        scannedFromBlock: previousResult!.scannedFromBlock ?? startBlock,
+        scannedToBlock: previousScannedToBlock,
+        incrementalFromBlock: endBlock,
+        incrementalNewTxCount: 0,
+        txDiscoverySource: "archive",
+      };
+    }
+    input.onProgress?.(`归档已覆盖最新区块 ${endBlock}，仅重新汇总滚动窗口`);
   }
 
   const txHashesKey = txHashesCacheKey({ chain: input.chain, address, startBlock: scanStartBlock, endBlock });
   const canUseTxHashesCache = !input.forceRefresh && !input.walletTransactions?.length;
   const cachedTxHashes = canUseTxHashesCache ? readTxHashesCache(txHashesKey) : null;
-  const discovery = cachedTxHashes
-    ? { hashes: cachedTxHashes, source: "archive" as TxDiscoverySource }
-    : await discoverOkxHashes({
+  const archiveAlreadyCoversWindow = canIncrementalRefresh && endBlock <= previousScannedToBlock!;
+  const discovery = archiveAlreadyCoversWindow
+    ? { hashes: [], source: "archive" as TxDiscoverySource }
+    : cachedTxHashes
+      ? { hashes: cachedTxHashes, source: "archive" as TxDiscoverySource }
+      : await discoverOkxHashes({
         input,
         rpc,
         address,

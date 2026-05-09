@@ -104,16 +104,25 @@ export async function handleFeishuNotify(request, response, config) {
     return;
   }
 
-  validateFeishuWebhookUrl(config.feishuWebhookUrl);
   const body = await readJsonBody(request);
   const text = validateFeishuNotifyBody(body);
-  const payload = createFeishuTextPayload(text, config);
+  await sendFeishuText(text, config);
+  sendJson(response, 200, { ok: true }, { "cache-control": "no-store" });
+}
+
+export async function sendFeishuText(text, config) {
+  if (!config.feishuWebhookUrl) throw new Error("Feishu webhook is not configured");
+  validateFeishuWebhookUrl(config.feishuWebhookUrl);
+  const cleanText = String(text || "").trim();
+  if (!cleanText) throw new Error("Feishu notify text is empty");
+  if (cleanText.length > 4000) throw new Error("Feishu notify text is too large");
+  const payload = createFeishuTextPayload(cleanText, config);
   const result = await postJson(config.feishuWebhookUrl, payload);
   const resultCode = result?.code ?? result?.StatusCode ?? 0;
   if (Number(resultCode) !== 0) {
     throw new Error(`Feishu notify failed: ${result?.msg || result?.message || result?.StatusMessage || "unknown error"}`);
   }
-  sendJson(response, 200, { ok: true }, { "cache-control": "no-store" });
+  return result;
 }
 
 export function handleUnknownApi(response) {
@@ -159,7 +168,7 @@ function envValue(env, primary, legacy) {
   return ((env[primary] || (legacy ? env[legacy] : "")) || "").trim();
 }
 
-function validateAccess(request, config) {
+export function validateAccess(request, config) {
   if (!config.accessPassword) return;
 
   const direct = headerValue(request.headers, "x-okx-boost-access");
@@ -233,7 +242,7 @@ function validateExplorerParams(params) {
   if (!["asc", "desc"].includes(params.get("sort") || "")) throw new Error("Invalid explorer sort");
 }
 
-async function readJsonBody(request) {
+export async function readJsonBody(request) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {

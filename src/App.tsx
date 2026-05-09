@@ -34,6 +34,7 @@ import type { CalculationResult, ParsedSwap, TokenGroup, TokenMeta } from "./lib
 const SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
 const SERVER_MANAGED_EXPLORER_API_KEY = "__server__";
 const SERVER_MANAGED_ANKR_RPC_URL = "/api/ankr";
+const ACCESS_HEADER = "x-okx-boost-access";
 const UI_STATE_KEY = "okx-boost:ui:v4";
 const RESULT_CACHE_PREFIX = "okx-boost:result:v2";
 const SCAN_HISTORY_KEY = "okx-boost:scan-history:v1";
@@ -78,6 +79,14 @@ type PersistedUiState = {
 type PersistedResultRecord = {
   result: CalculationResult;
   savedAt?: string;
+};
+type ServerArchivePayload = {
+  walletsText?: string;
+  endDate?: string;
+  tenDayTarget?: string;
+  boostOverrides?: string;
+  records?: WalletArchiveRecord[];
+  scanHistory?: ScanHistoryRecord[];
 };
 type WalletListEntry = {
   address: string;
@@ -194,6 +203,7 @@ export default function App() {
     isAppView(initialUiState.currentView) ? initialUiState.currentView : "overview",
   );
   const [notifyState, setNotifyState] = useState<NotifyState>({ status: "idle", message: "" });
+  const [serverArchiveReady, setServerArchiveReady] = useState(false);
   const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
     syncWalletRecords([], parseWalletList(initialWalletsText).entries, initialEndDate),
   );
@@ -257,6 +267,50 @@ export default function App() {
   useEffect(() => {
     setRecords((current) => syncWalletRecords(current, parsedWallets.entries, endDate));
   }, [walletsKey, walletNamesKey, endDate, parsedWallets.entries]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadServerArchive() {
+      setServerArchiveReady(false);
+      try {
+        const response = await fetch("/api/archive", {
+          method: "GET",
+          headers: archiveAccessHeaders(accessPassword),
+        });
+        if (!response.ok) return;
+        const payload = (await response.json().catch(() => ({}))) as { archive?: ServerArchivePayload | null };
+        const archive = payload.archive;
+        if (!archive) return;
+        if (!archive.walletsText && !archive.records?.length) return;
+        if (cancelled) return;
+        hydrateServerArchive(archive);
+      } catch {
+        // Server archive is optional; local storage remains the fallback.
+      } finally {
+        if (!cancelled) setServerArchiveReady(true);
+      }
+    }
+    void loadServerArchive();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessPassword]);
+
+  useEffect(() => {
+    if (!serverArchiveReady || anyRunning) return;
+    const timer = window.setTimeout(() => {
+      void syncServerArchive({
+        walletsText,
+        endDate,
+        tenDayTarget,
+        boostOverrides,
+        records,
+        scanHistory,
+        accessPassword,
+      });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, records, scanHistory, accessPassword]);
 
   useEffect(() => {
     if (selectedWallet && !parsedWallets.addresses.includes(selectedWallet)) {
@@ -484,6 +538,26 @@ export default function App() {
 
   function updateBonusOverrides(value: string) {
     setBoostOverrides(value);
+  }
+
+  function hydrateServerArchive(archive: ServerArchivePayload) {
+    const nextEndDate = archive.endDate && isUtcDate(archive.endDate) ? archive.endDate : endDate;
+    const nextWalletsText = archive.walletsText || walletsText;
+    const nextRecords = hydrateRecordsFromServerArchive(archive, nextWalletsText, nextEndDate);
+
+    setWalletsText(nextWalletsText);
+    setEndDate(nextEndDate);
+    if (archive.tenDayTarget !== undefined) setTenDayTarget(archive.tenDayTarget || DEFAULT_TEN_DAY_TARGET);
+    if (archive.boostOverrides !== undefined) setBoostOverrides(archive.boostOverrides || "");
+    if (archive.scanHistory) {
+      const history = archive.scanHistory.filter(isScanHistoryRecord).slice(0, MAX_SCAN_HISTORY_RECORDS);
+      setScanHistory(history);
+      writePersistedScanHistory(history);
+    }
+    setRecords(nextRecords);
+    for (const record of nextRecords) {
+      if (record.result && record.savedAt) writePersistedResult(record.address, nextEndDate, record.result, record.savedAt);
+    }
   }
 
   function changeView(view: AppView) {
@@ -2855,6 +2929,100 @@ function visibleWarnings(warnings: string[]): string[] {
       !warning.startsWith("钱包交易记录索引读取失败") &&
       !warning.startsWith("Ankr Advanced API 读取失败"),
   );
+}
+
+function hydrateRecordsFromServerArchive(
+  archive: ServerArchivePayload,
+  walletsText: string,
+  endDate: string,
+): WalletArchiveRecord[] {
+  const entries = parseWalletList(walletsText).entries;
+  const recordsByAddress = new Map(
+    (archive.records || [])
+      .filter((record) => isAddress(record.address))
+      .map((record) => [normalizeAddress(record.address), record]),
+  );
+
+  return entries.map((entry) => {
+    const archived = recordsByAddress.get(entry.address);
+    if (archived?.result && archived.result.windowEnd === endDate) {
+      return {
+        address: entry.address,
+        name: entry.name || archived.name || "",
+        state: "done",
+        source: "archive",
+        result: archived.result,
+        progress: "已从服务端归档恢复",
+        error: "",
+        savedAt: archived.savedAt,
+      };
+    }
+    if (archived?.result) {
+      return {
+        address: entry.address,
+        name: entry.name || archived.name || "",
+        state: "done",
+        source: "archive",
+        result: archived.result,
+        progress: "服务端归档待刷新",
+        error: "",
+        savedAt: archived.savedAt,
+      };
+    }
+    return {
+      address: entry.address,
+      name: entry.name,
+      state: archived?.state === "error" ? "error" : "idle",
+      source: "empty",
+      result: null,
+      progress: archived?.progress || "等待扫描",
+      error: archived?.error || "",
+      savedAt: archived?.savedAt,
+    };
+  });
+}
+
+async function syncServerArchive(params: {
+  walletsText: string;
+  endDate: string;
+  tenDayTarget: string;
+  boostOverrides: string;
+  records: WalletArchiveRecord[];
+  scanHistory: ScanHistoryRecord[];
+  accessPassword: string;
+}) {
+  const payload: ServerArchivePayload = {
+    walletsText: params.walletsText,
+    endDate: params.endDate,
+    tenDayTarget: params.tenDayTarget,
+    boostOverrides: params.boostOverrides,
+    records: params.records.map((record) => ({
+      address: record.address,
+      name: record.name,
+      state: record.state,
+      source: record.source,
+      result: record.result,
+      progress: record.progress,
+      error: record.error,
+      savedAt: record.savedAt,
+    })),
+    scanHistory: params.scanHistory,
+  };
+
+  try {
+    await fetch("/api/archive", {
+      method: "POST",
+      headers: archiveAccessHeaders(params.accessPassword, { "content-type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // Server archive sync must never block the local calculator.
+  }
+}
+
+function archiveAccessHeaders(accessPassword: string, headers: Record<string, string> = {}): Record<string, string> {
+  const password = accessPassword.trim();
+  return password ? { ...headers, [ACCESS_HEADER]: password } : serverAccessHeaders(headers);
 }
 
 function readPersistedUiState(): PersistedUiState {

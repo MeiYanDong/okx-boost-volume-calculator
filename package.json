@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
-    "build": "tsc -b && vite build",
+    "build": "npm run lint && vite build && npm run build:server",
+    "build:server": "vite build --config vite.server.config.ts",
     "preview": "NODE_ENV=production node server.mjs",
     "start": "NODE_ENV=production node server.mjs",
     "lint": "npm run lint:app && npm run lint:node",
     "lint:app": "tsc -p tsconfig.json --noEmit",
-    "lint:node": "tsc -p tsconfig.node.json --noEmit"
+    "lint:node": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
+    "@upstash/redis": "^1.38.0",
     "@vitejs/plugin-react": "^5.0.4",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

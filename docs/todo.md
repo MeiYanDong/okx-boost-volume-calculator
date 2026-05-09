@@ -35,6 +35,8 @@
   子 todo：[S14 清理归档入口移除与飞书通知](./todos/2026-05-09-feishu-notification-cleanup.md)
 - [x] S15 收敛到期交易量文案
   子 todo：[S15 到期交易量文案收敛](./todos/2026-05-09-expiring-volume-copy.md)
+- [ ] S16 服务端归档与每日自动刷新
+  子 todo：[S16 服务端归档与每日自动刷新](./todos/2026-05-09-server-cron-refresh.md)
 
 ## 维护规则
 
