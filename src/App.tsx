@@ -1,30 +1,23 @@
 import {
   AlertCircle,
   BarChart3,
-  Bell,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   ClipboardList,
   Clock3,
   Copy,
-  Database,
   ExternalLink,
   Gauge,
   Home,
-  Inbox,
-  Info,
-  ListChecks,
   LockKeyhole,
+  MoreHorizontal,
+  PencilLine,
   RefreshCcw,
-  Search,
   Settings,
   ShieldCheck,
-  Upload,
   UserCircle,
-  Users,
   Wallet,
   WalletCards,
   X,
@@ -32,7 +25,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BSC_CHAIN, isAddress, normalizeAddress } from "./lib/chains";
-import { calculateBoostVolume, latestSelectableUtcDate } from "./lib/calculator";
+import { buildUtcWindow, calculateBoostVolume, latestSelectableUtcDate } from "./lib/calculator";
 import { clearOkxBoostCache } from "./lib/cache";
 import { formatNumber, formatUsd, shortHash } from "./lib/format";
 import { readServerAccessPassword, writeServerAccessPassword } from "./lib/serverAccess";
@@ -43,12 +36,27 @@ const SERVER_MANAGED_EXPLORER_API_KEY = "__server__";
 const SERVER_MANAGED_ANKR_RPC_URL = "/api/ankr";
 const UI_STATE_KEY = "okx-boost:ui:v4";
 const RESULT_CACHE_PREFIX = "okx-boost:result:v2";
+const SCAN_HISTORY_KEY = "okx-boost:scan-history:v1";
 const BULK_SCAN_CONCURRENCY = 3;
+const DEFAULT_TEN_DAY_TARGET = "5000";
+const MAX_SCAN_HISTORY_RECORDS = 200;
+const ADDRESS_PATTERN = /0x[a-fA-F0-9]{40}/g;
+const SNAPSHOT_CONFIRM_TIME_LABEL = "08:00";
 
 type RunState = "idle" | "running" | "done" | "error";
 type ArchiveSource = "empty" | "archive" | "fresh";
 type WalletFilter = "all" | "archived" | "running" | "pending" | "error";
+type AppView = "overview" | "wallets" | "scan-records" | "reports" | "settings";
 type DetailTab = "daily" | "bonus" | "tx";
+type ScanMode = "scan" | "refresh" | "rescan" | "archive";
+type ScanHistoryStatus = "success" | "error";
+type PrimaryActionKind = "manage-wallets" | "running" | "scan-pending" | "retry-failed" | "refresh-all";
+type PrimaryActionModel = {
+  kind: PrimaryActionKind;
+  label: string;
+  description: string;
+  disabled?: boolean;
+};
 type ScopedBonusRules = {
   scoped: Record<string, number>;
   global: Record<string, number>;
@@ -59,15 +67,27 @@ type PersistedUiState = {
   endDate?: string;
   boostOverrides?: string;
   selectedWallet?: string;
-  dailyTarget?: string;
+  tenDayTarget?: string;
   walletFilter?: WalletFilter;
+  currentView?: AppView;
 };
 type PersistedResultRecord = {
   result: CalculationResult;
   savedAt?: string;
 };
+type WalletListEntry = {
+  address: string;
+  name: string;
+};
+type ParsedWalletList = {
+  entries: WalletListEntry[];
+  addresses: string[];
+  invalid: string[];
+  duplicateCount: number;
+};
 type WalletArchiveRecord = {
   address: string;
+  name: string;
   state: RunState;
   source: ArchiveSource;
   result: CalculationResult | null;
@@ -78,7 +98,45 @@ type WalletArchiveRecord = {
 type ScanWalletOptions = {
   forceRefresh?: boolean;
   refresh?: boolean;
-  label?: string;
+};
+type ScanHistoryRecord = {
+  id: string;
+  address: string;
+  snapshotDate: string;
+  mode: ScanMode;
+  status: ScanHistoryStatus;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  source?: CalculationResult["txDiscoverySource"];
+  scannedFromBlock?: number;
+  scannedToBlock?: number;
+  incrementalFromBlock?: number;
+  newTxCount?: number;
+  totalTxCount?: number;
+  warningCount?: number;
+  error?: string;
+};
+type DailyPortfolioRow = {
+  date: string;
+  boostVolume: number;
+  tradeUsd: number;
+  txCount: number;
+};
+type WalletRankingRow = {
+  address: string;
+  name: string;
+  totalBoostVolume: number;
+  averageBoostVolume: number;
+  todayBoostVolume: number;
+  countedTxCount: number;
+  targetDelta: number | null;
+};
+type SourceBreakdownRow = {
+  source: CalculationResult["txDiscoverySource"];
+  label: string;
+  walletCount: number;
+  boostVolume: number;
 };
 type PortfolioSummary = {
   totalWallets: number;
@@ -93,6 +151,28 @@ type PortfolioSummary = {
   targetGap: number;
   targetRate: number;
 };
+type SnapshotForecastWalletRow = {
+  address: string;
+  name: string;
+  boostVolume: number;
+  gap: number;
+  expiredBoostVolume: number;
+  targetMet: boolean;
+};
+type SnapshotForecastRow = {
+  snapshotDate: string;
+  runLabel: string;
+  windowStart: string;
+  windowEnd: string;
+  expiredDate: string;
+  archivedWallets: number;
+  targetMetWallets: number;
+  atRiskWallets: number;
+  totalBoostVolume: number;
+  expiredBoostVolume: number;
+  worstGap: number;
+  walletRows: SnapshotForecastWalletRow[];
+};
 
 export default function App() {
   const maxSnapshotDate = latestSelectableUtcDate();
@@ -101,20 +181,26 @@ export default function App() {
   const initialEndDate = initialUiState.endDate || maxSnapshotDate;
   const [walletsText, setWalletsText] = useState(initialWalletsText);
   const [endDate, setEndDate] = useState(initialEndDate);
-  const [dailyTarget, setDailyTarget] = useState(initialUiState.dailyTarget || "");
+  const [tenDayTarget, setTenDayTarget] = useState(initialUiState.tenDayTarget || DEFAULT_TEN_DAY_TARGET);
   const [accessPassword, setAccessPassword] = useState(readServerAccessPassword);
   const [boostOverrides, setBoostOverrides] = useState(initialUiState.boostOverrides || "");
-  const [selectedWallet, setSelectedWallet] = useState(initialUiState.selectedWallet || "");
+  const [selectedWallet, setSelectedWallet] = useState("");
   const [walletFilter, setWalletFilter] = useState<WalletFilter>(initialUiState.walletFilter || "all");
-  const [walletEditorOpen, setWalletEditorOpen] = useState(false);
-  const [progress, setProgress] = useState("准备同步钱包归档");
-  const [error, setError] = useState("");
-  const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
-    syncWalletRecords([], parseWalletList(initialWalletsText).addresses, initialEndDate),
+  const [currentView, setCurrentView] = useState<AppView>(
+    isAppView(initialUiState.currentView) ? initialUiState.currentView : "overview",
   );
+  const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
+    syncWalletRecords([], parseWalletList(initialWalletsText).entries, initialEndDate),
+  );
+  const [scanHistory, setScanHistory] = useState<ScanHistoryRecord[]>(readPersistedScanHistory);
 
   const parsedWallets = useMemo(() => parseWalletList(walletsText), [walletsText]);
   const walletsKey = parsedWallets.addresses.join(",");
+  const walletNamesKey = parsedWallets.entries.map((entry) => `${entry.address}:${entry.name}`).join("|");
+  const walletNameByAddress = useMemo(
+    () => new Map(parsedWallets.entries.map((entry) => [entry.address, entry.name])),
+    [walletNamesKey, parsedWallets.entries],
+  );
   const anyRunning = records.some((record) => record.state === "running");
   const appliedRecords = useMemo(
     () =>
@@ -128,32 +214,44 @@ export default function App() {
     () => filterWalletRecords(appliedRecords, walletFilter),
     [appliedRecords, walletFilter],
   );
-  const targetDaily = parseOptionalAmount(dailyTarget);
+  const targetTotal = parseOptionalAmount(tenDayTarget);
   const portfolio = useMemo(
-    () => buildPortfolioSummary(appliedRecords, endDate, targetDaily),
-    [appliedRecords, endDate, targetDaily],
+    () => buildPortfolioSummary(appliedRecords, endDate, targetTotal),
+    [appliedRecords, endDate, targetTotal],
+  );
+  const snapshotForecastRows = useMemo(
+    () => buildSnapshotForecastRows(appliedRecords, endDate, targetTotal),
+    [appliedRecords, endDate, targetTotal],
+  );
+  const scanHistoryRows = useMemo(
+    () => (scanHistory.length > 0 ? scanHistory : buildArchiveHistoryRecords(appliedRecords, endDate)),
+    [scanHistory, appliedRecords, endDate],
   );
   const selectedRecord = appliedRecords.find((record) => record.address === selectedWallet) || null;
-  const detailEntryRecord = appliedRecords.find((record) => record.result) || null;
+  const viewMeta = viewMetaFor(currentView, targetTotal);
+  const primaryAction = useMemo(
+    () => buildPrimaryAction(appliedRecords, portfolio, anyRunning),
+    [appliedRecords, portfolio, anyRunning],
+  );
 
   useEffect(() => {
     writePersistedUiState({
       walletsText,
       endDate,
       boostOverrides,
-      selectedWallet,
-      dailyTarget,
+      tenDayTarget,
       walletFilter,
+      currentView,
     });
-  }, [walletsText, endDate, boostOverrides, selectedWallet, dailyTarget, walletFilter]);
+  }, [walletsText, endDate, boostOverrides, tenDayTarget, walletFilter, currentView]);
 
   useEffect(() => {
     writeServerAccessPassword(accessPassword);
   }, [accessPassword]);
 
   useEffect(() => {
-    setRecords((current) => syncWalletRecords(current, parsedWallets.addresses, endDate));
-  }, [walletsKey, endDate, parsedWallets.addresses]);
+    setRecords((current) => syncWalletRecords(current, parsedWallets.entries, endDate));
+  }, [walletsKey, walletNamesKey, endDate, parsedWallets.entries]);
 
   useEffect(() => {
     if (selectedWallet && !parsedWallets.addresses.includes(selectedWallet)) {
@@ -161,46 +259,107 @@ export default function App() {
     }
   }, [selectedWallet, walletsKey, parsedWallets.addresses]);
 
-  async function scanAll(forceRefresh = false) {
-    setError("");
-    const addresses = parsedWallets.addresses;
+  async function runWalletBatch(params: {
+    addresses: string[];
+    forceRefresh?: boolean;
+    refresh?: boolean;
+  }) {
+    const addresses = params.addresses;
     if (!addresses.length) {
-      setError("请先填写至少一个有效的钱包地址。");
-      setProgress("等待有效钱包地址");
-      setWalletEditorOpen(true);
       return;
     }
 
-    if (forceRefresh) {
+    if (params.forceRefresh) {
       for (const wallet of addresses) clearPersistedResult(wallet, endDate);
     }
 
     const concurrency = Math.min(BULK_SCAN_CONCURRENCY, addresses.length);
-    let completed = 0;
-    let failed = 0;
-    setProgress(
-      forceRefresh
-        ? `开始并行强制重扫所有钱包（${concurrency} 路）...`
-        : `开始并行增量刷新钱包归档（${concurrency} 路）...`,
-    );
 
-    await runWithConcurrency(addresses, concurrency, async (wallet, index) => {
-      const ok = await scanWallet(wallet, {
-        forceRefresh,
-        refresh: !forceRefresh,
-        label: `${index + 1}/${addresses.length}`,
+    await runWithConcurrency(addresses, concurrency, async (wallet) => {
+      await scanWallet(wallet, {
+        forceRefresh: params.forceRefresh,
+        refresh: params.refresh,
       });
-      completed += 1;
-      if (!ok) failed += 1;
-      const action = forceRefresh ? "强制重扫" : "增量刷新";
-      setProgress(`${action}进度 ${completed}/${addresses.length}${failed ? `，失败 ${failed}` : ""}`);
     });
+  }
 
-    if (failed > 0) {
-      setProgress(forceRefresh ? `强制重扫完成，${failed} 个钱包失败` : `增量刷新完成，${failed} 个钱包失败`);
-    } else {
-      setProgress(forceRefresh ? "强制重扫完成" : "增量刷新完成");
+  async function scanAll(forceRefresh = false) {
+    const addresses = parsedWallets.addresses;
+    if (!addresses.length) {
+      setCurrentView("wallets");
+      return;
     }
+
+    await runWalletBatch({
+      addresses,
+      forceRefresh,
+      refresh: !forceRefresh,
+    });
+  }
+
+  async function scanPendingWallets() {
+    const pendingAddresses = appliedRecords
+      .filter((record) => !record.result && record.state !== "running" && record.state !== "error")
+      .map((record) => record.address);
+    await runWalletBatch({
+      addresses: pendingAddresses,
+      refresh: false,
+    });
+  }
+
+  async function retryFailedWallets() {
+    const failedAddresses = appliedRecords.filter((record) => record.state === "error").map((record) => record.address);
+    await runWalletBatch({
+      addresses: failedAddresses,
+      refresh: true,
+    });
+  }
+
+  function handlePrimaryAction() {
+    if (primaryAction.kind === "manage-wallets") {
+      setCurrentView("wallets");
+      return;
+    }
+    if (primaryAction.kind === "scan-pending") {
+      void scanPendingWallets();
+      return;
+    }
+    if (primaryAction.kind === "retry-failed") {
+      void retryFailedWallets();
+      return;
+    }
+    if (primaryAction.kind === "refresh-all") {
+      void scanAll(false);
+    }
+  }
+
+  function confirmForceScanAll() {
+    const ok = window.confirm("强制重扫会清空所有钱包当前快照日期的本地归档，并重新消耗 Ankr / RPC 额度。确认继续吗？");
+    if (ok) void scanAll(true);
+  }
+
+  function confirmForceScanWallet(address: string) {
+    const record = appliedRecords.find((item) => item.address === normalizeAddress(address));
+    const label = record ? walletDisplayName(record) : shortAddress(address);
+    const ok = window.confirm(`强制重扫 ${label} 会清空该钱包当前快照日期的本地归档，并重新消耗 Ankr / RPC 额度。确认继续吗？`);
+    if (ok) void scanWallet(address, { forceRefresh: true });
+  }
+
+  function renameWallet(address: string) {
+    const normalizedAddress = normalizeAddress(address);
+    const record = appliedRecords.find((item) => item.address === normalizedAddress);
+    const currentName = record?.name || "";
+    const nextName = window.prompt("输入钱包名称。留空则恢复默认名称。", currentName);
+    if (nextName === null) return;
+    setWalletsText((current) => updateWalletNameInText(current, normalizedAddress, nextName));
+  }
+
+  function appendScanHistory(record: ScanHistoryRecord) {
+    setScanHistory((current) => {
+      const next = [record, ...current.filter((item) => item.id !== record.id)].slice(0, MAX_SCAN_HISTORY_RECORDS);
+      writePersistedScanHistory(next);
+      return next;
+    });
   }
 
   async function scanWallet(address: string, options: ScanWalletOptions = {}) {
@@ -215,7 +374,6 @@ export default function App() {
         progress: "已使用本地归档",
         error: "",
       });
-      setProgress(`${shortAddress(normalizedAddress)} 已使用本地归档`);
       return true;
     }
     const existingRecord = records.find((record) => record.address === normalizedAddress) || null;
@@ -240,6 +398,10 @@ export default function App() {
       savedAt: keepPreviousResult ? previousSavedAt : undefined,
     });
 
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    const mode = scanModeFromOptions(options);
+
     try {
       const computed = await calculateBoostVolume({
         address: normalizedAddress,
@@ -252,13 +414,28 @@ export default function App() {
         incrementalRefresh: options.refresh,
         previousResult: previousResult || undefined,
         onProgress: (message) => {
-          const prefix = options.label ? `${options.label} ${shortAddress(normalizedAddress)}` : shortAddress(normalizedAddress);
           patchRecord(normalizedAddress, { progress: message });
-          setProgress(`${prefix}: ${message}`);
         },
       });
       const savedAt = new Date().toISOString();
       writePersistedResult(normalizedAddress, endDate, computed, savedAt);
+      appendScanHistory({
+        id: `${normalizedAddress}:${endDate}:${startedAt}:${mode}`,
+        address: normalizedAddress,
+        snapshotDate: endDate,
+        mode,
+        status: "success",
+        startedAt,
+        endedAt: savedAt,
+        durationMs: Date.now() - startedAtMs,
+        source: computed.txDiscoverySource,
+        scannedFromBlock: computed.scannedFromBlock,
+        scannedToBlock: computed.scannedToBlock,
+        incrementalFromBlock: computed.incrementalFromBlock,
+        newTxCount: computed.incrementalNewTxCount,
+        totalTxCount: computed.swaps.length,
+        warningCount: visibleWarnings(computed.warnings).length,
+      });
       patchRecord(normalizedAddress, {
         state: "done",
         source: "fresh",
@@ -272,12 +449,23 @@ export default function App() {
       return true;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
+      const endedAt = new Date().toISOString();
+      appendScanHistory({
+        id: `${normalizedAddress}:${endDate}:${startedAt}:${mode}`,
+        address: normalizedAddress,
+        snapshotDate: endDate,
+        mode,
+        status: "error",
+        startedAt,
+        endedAt,
+        durationMs: Date.now() - startedAtMs,
+        error: message,
+      });
       patchRecord(normalizedAddress, {
         state: "error",
         error: message,
         progress: "计算失败",
       });
-      setError(`${shortAddress(normalizedAddress)} 计算失败：${message}`);
       return false;
     }
   }
@@ -290,9 +478,8 @@ export default function App() {
   }
 
   function clearCache() {
-    const removedRuntimeCache = clearOkxBoostCache();
-    const removedResults = clearPersistedResults();
-    const total = removedRuntimeCache + removedResults;
+    clearOkxBoostCache();
+    clearPersistedResults();
     setRecords((current) =>
       current.map((record) => ({
         ...record,
@@ -305,92 +492,125 @@ export default function App() {
       })),
     );
     setSelectedWallet("");
-    setProgress(total > 0 ? `已清理 ${total} 条本地归档和运行缓存` : "没有可清理的本地缓存");
   }
 
   function updateBonusOverrides(value: string) {
     setBoostOverrides(value);
-    setProgress("已本地应用代币额外加成，不重新扫链");
   }
 
-  function openDetailEntry() {
-    if (detailEntryRecord) {
-      setSelectedWallet(detailEntryRecord.address);
-      return;
-    }
-    setWalletEditorOpen(true);
+  function changeView(view: AppView) {
+    setCurrentView(view);
+    if (view !== "overview") setSelectedWallet("");
+  }
+
+  function openReportWallet(address: string) {
+    setCurrentView("overview");
+    setSelectedWallet(address);
   }
 
   return (
     <main className="app-frame">
       <Sidebar
-        walletCount={portfolio.totalWallets}
-        onOpenWalletEditor={() => setWalletEditorOpen(true)}
+        currentView={currentView}
+        onViewChange={changeView}
         onClearCache={clearCache}
         disabled={anyRunning}
       />
 
       <section className="main-workspace">
-        <Topbar />
+        <Topbar title={viewMeta.title} subtitle={viewMeta.subtitle} />
 
-        <Toolbar
-          endDate={endDate}
-          maxSnapshotDate={maxSnapshotDate}
-          walletFilter={walletFilter}
-          archivedWallets={portfolio.archivedWallets}
-          totalWallets={portfolio.totalWallets}
-          anyRunning={anyRunning}
-          onEndDateChange={setEndDate}
-          onWalletFilterChange={setWalletFilter}
-          onSync={() => scanAll(false)}
-          onForceScan={() => scanAll(true)}
-        />
-
-        <StatusStrip
-          progress={progress}
-          error={error}
-          invalidWallets={parsedWallets.invalid}
-          duplicateCount={parsedWallets.duplicateCount}
-          onOpenWalletEditor={() => setWalletEditorOpen(true)}
-        />
-
-        {walletEditorOpen && (
-          <WalletEditor
-            walletsText={walletsText}
-            accessPassword={accessPassword}
-            validCount={parsedWallets.addresses.length}
-            invalidCount={parsedWallets.invalid.length}
-            onWalletsTextChange={setWalletsText}
-            onAccessPasswordChange={setAccessPassword}
-            onClose={() => setWalletEditorOpen(false)}
+        {currentView !== "wallets" && (
+          <Toolbar
+            endDate={endDate}
+            maxSnapshotDate={maxSnapshotDate}
+            walletFilter={walletFilter}
+            archivedWallets={portfolio.archivedWallets}
+            totalWallets={portfolio.totalWallets}
+            anyRunning={anyRunning}
+            primaryAction={primaryAction}
+            onEndDateChange={setEndDate}
+            onWalletFilterChange={setWalletFilter}
+            onPrimaryAction={handlePrimaryAction}
+            onForceScan={confirmForceScanAll}
           />
         )}
 
-        <div className="dashboard-grid">
-          <WalletTablePanel
-            records={filteredRecords}
-            totalRecords={appliedRecords.length}
-            endDate={endDate}
-            targetDaily={targetDaily}
-            selectedWallet={selectedWallet}
-            disabled={anyRunning}
-            onSelectWallet={setSelectedWallet}
-            onScanWallet={(address) => scanWallet(address)}
-            onRefreshWallet={(address) => scanWallet(address, { refresh: true })}
-            onForceScanWallet={(address) => scanWallet(address, { forceRefresh: true })}
-            onOpenWalletEditor={() => setWalletEditorOpen(true)}
-          />
+        {currentView === "overview" && (
+          <div className="overview-workspace">
+            <OverviewSummary
+              portfolio={portfolio}
+              targetTotal={targetTotal}
+              primaryAction={primaryAction}
+              tenDayTargetText={tenDayTarget}
+              onTenDayTargetChange={setTenDayTarget}
+            />
 
-          <OverviewRail
-            portfolio={portfolio}
-            targetDaily={targetDaily}
-            dailyTargetText={dailyTarget}
-            onDailyTargetChange={setDailyTarget}
-            onSync={() => scanAll(false)}
-            onOpenDetail={openDetailEntry}
-            detailDisabled={!detailEntryRecord}
+            <SnapshotForecastPanel
+              rows={snapshotForecastRows}
+              targetTotal={targetTotal}
+              onSelectWallet={setSelectedWallet}
+            />
+
+            <WalletTablePanel
+              records={filteredRecords}
+              totalRecords={appliedRecords.length}
+              endDate={endDate}
+              targetTotal={targetTotal}
+              selectedWallet={selectedWallet}
+              disabled={anyRunning}
+              onSelectWallet={setSelectedWallet}
+              onScanWallet={(address) => scanWallet(address)}
+              onRefreshWallet={(address) => scanWallet(address, { refresh: true })}
+              onForceScanWallet={confirmForceScanWallet}
+              onRenameWallet={renameWallet}
+            />
+          </div>
+        )}
+
+        {currentView === "wallets" && (
+          <WalletManagementPage
+            walletsText={walletsText}
+            accessPassword={accessPassword}
+            records={appliedRecords}
+            validCount={parsedWallets.addresses.length}
+            invalidCount={parsedWallets.invalid.length}
+            duplicateCount={parsedWallets.duplicateCount}
+            archivedWallets={portfolio.archivedWallets}
+            anyRunning={anyRunning}
+            onWalletsTextChange={setWalletsText}
+            onAccessPasswordChange={setAccessPassword}
+            onScanAll={() => scanAll(false)}
+            onForceScanAll={confirmForceScanAll}
+            onRenameWallet={renameWallet}
           />
-        </div>
+        )}
+
+        {currentView === "scan-records" && (
+          <ScanRecordsPage records={scanHistoryRows} walletCount={portfolio.totalWallets} walletNameByAddress={walletNameByAddress} />
+        )}
+
+        {currentView === "reports" && (
+          <ReportsPage
+            records={appliedRecords}
+            portfolio={portfolio}
+            endDate={endDate}
+            targetTotal={targetTotal}
+            onSelectWallet={openReportWallet}
+          />
+        )}
+
+        {currentView === "settings" && (
+          <SettingsPage
+            tenDayTargetText={tenDayTarget}
+            targetTotal={targetTotal}
+            portfolio={portfolio}
+            scanHistoryCount={scanHistoryRows.length}
+            anyRunning={anyRunning}
+            onTenDayTargetChange={setTenDayTarget}
+            onClearCache={clearCache}
+          />
+        )}
 
         {selectedRecord?.result && (
           <WalletDetailDrawer
@@ -398,7 +618,8 @@ export default function App() {
             bonusRules={boostOverrides}
             onBonusRulesChange={updateBonusOverrides}
             onRefresh={() => scanWallet(selectedRecord.address, { refresh: true })}
-            onForceScan={() => scanWallet(selectedRecord.address, { forceRefresh: true })}
+            onForceScan={() => confirmForceScanWallet(selectedRecord.address)}
+            onRename={() => renameWallet(selectedRecord.address)}
             disabled={anyRunning}
             onClose={() => setSelectedWallet("")}
           />
@@ -409,13 +630,13 @@ export default function App() {
 }
 
 function Sidebar({
-  walletCount,
-  onOpenWalletEditor,
+  currentView,
+  onViewChange,
   onClearCache,
   disabled,
 }: {
-  walletCount: number;
-  onOpenWalletEditor: () => void;
+  currentView: AppView;
+  onViewChange: (view: AppView) => void;
   onClearCache: () => void;
   disabled: boolean;
 }) {
@@ -424,32 +645,42 @@ function Sidebar({
     items: Array<{ label: string; icon: LucideIcon; active?: boolean; badge?: string; onClick?: () => void; disabled?: boolean }>;
   }> = [
     {
-      items: [{ label: "总览", icon: Home, active: true }],
-    },
-    {
-      title: "钱包管理",
       items: [
-        { label: "所有钱包", icon: WalletCards, badge: String(walletCount), onClick: onOpenWalletEditor },
-        { label: "分组管理", icon: Users },
-        { label: "导入钱包", icon: Upload, onClick: onOpenWalletEditor },
+        { label: "总览", icon: Home, active: currentView === "overview", onClick: () => onViewChange("overview") },
+        { label: "钱包管理", icon: WalletCards, active: currentView === "wallets", onClick: () => onViewChange("wallets") },
       ],
     },
     {
       title: "数据与扫描",
       items: [
-        { label: "扫描记录", icon: ClipboardList },
-        { label: "扫描任务", icon: ListChecks },
+        {
+          label: "扫描记录",
+          icon: ClipboardList,
+          active: currentView === "scan-records",
+          onClick: () => onViewChange("scan-records"),
+        },
       ],
     },
     {
       title: "分析",
-      items: [{ label: "统计报表", icon: BarChart3 }],
+      items: [
+        {
+          label: "统计报表",
+          icon: BarChart3,
+          active: currentView === "reports",
+          onClick: () => onViewChange("reports"),
+        },
+      ],
     },
     {
       title: "设置",
       items: [
-        { label: "提醒设置", icon: Bell },
-        { label: "偏好设置", icon: Settings },
+        {
+          label: "偏好设置",
+          icon: Settings,
+          active: currentView === "settings",
+          onClick: () => onViewChange("settings"),
+        },
         { label: "清理归档", icon: X, onClick: onClearCache, disabled },
       ],
     },
@@ -497,20 +728,14 @@ function Sidebar({
   );
 }
 
-function Topbar() {
+function Topbar({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <header className="topbar">
       <div>
-        <h1>OKX Boost 钱包总览</h1>
-        <span>BNB Chain · 最近 10 天 Boost 交易归档</span>
+        <h1>{title}</h1>
+        <span>{subtitle}</span>
       </div>
       <div className="topbar-actions">
-        <button type="button" title="帮助">
-          <CircleHelp size={19} />
-        </button>
-        <button type="button" title="提醒">
-          <Bell size={19} />
-        </button>
         <div className="user-chip">
           <UserCircle size={25} />
           <strong>MYANDONG</strong>
@@ -528,9 +753,10 @@ function Toolbar({
   archivedWallets,
   totalWallets,
   anyRunning,
+  primaryAction,
   onEndDateChange,
   onWalletFilterChange,
-  onSync,
+  onPrimaryAction,
   onForceScan,
 }: {
   endDate: string;
@@ -539,24 +765,28 @@ function Toolbar({
   archivedWallets: number;
   totalWallets: number;
   anyRunning: boolean;
+  primaryAction: PrimaryActionModel;
   onEndDateChange: (value: string) => void;
   onWalletFilterChange: (value: WalletFilter) => void;
-  onSync: () => void;
+  onPrimaryAction: () => void;
   onForceScan: () => void;
 }) {
   return (
     <section className="toolbar" aria-label="扫描工具条">
       <div className="snapshot-label">
-        <span>快照时间：</span>
-        <strong>{endDate} 00:00 UTC</strong>
+        <span>快照日：</span>
+        <strong>{endDate} UTC 日结</strong>
         <Clock3 size={16} />
       </div>
 
       <label className="toolbar-control date-control">
         <CalendarDays size={17} />
-        <span>最近 10 天（含今天）</span>
+        <span>最近 10 天</span>
+        <strong>{formatToolbarDate(endDate)}</strong>
         <input
           type="date"
+          aria-label="选择快照日期"
+          title="选择快照日期"
           max={maxSnapshotDate}
           value={endDate}
           onChange={(event) => onEndDateChange(event.target.value)}
@@ -581,96 +811,195 @@ function Toolbar({
         <span>{archivedWallets}/{totalWallets || 0}</span>
       </div>
 
-      <button type="button" className="toolbar-button" onClick={onForceScan} disabled={anyRunning}>
+      <button
+        type="button"
+        className="toolbar-primary-button"
+        onClick={onPrimaryAction}
+        disabled={Boolean(primaryAction.disabled)}
+        title={primaryAction.description}
+      >
         <RefreshCcw size={17} />
-        强制重新扫描
+        {primaryAction.label}
       </button>
 
-      <button type="button" className="toolbar-icon-button" onClick={onSync} disabled={anyRunning} title="增量刷新归档">
-        <RefreshCcw size={17} />
-      </button>
+      <details className="toolbar-more">
+        <summary aria-label="更多操作">
+          <MoreHorizontal size={18} />
+          <span>更多</span>
+        </summary>
+        <div className="toolbar-more-menu">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.currentTarget.closest("details")?.removeAttribute("open");
+              onForceScan();
+            }}
+            disabled={anyRunning}
+            className="danger-action"
+          >
+            <RefreshCcw size={15} />
+            强制重扫全部
+          </button>
+        </div>
+      </details>
     </section>
   );
 }
 
-function StatusStrip({
-  progress,
-  error,
-  invalidWallets,
-  duplicateCount,
-  onOpenWalletEditor,
-}: {
-  progress: string;
-  error: string;
-  invalidWallets: string[];
-  duplicateCount: number;
-  onOpenWalletEditor: () => void;
-}) {
-  const hasWarning = invalidWallets.length > 0 || duplicateCount > 0;
-  return (
-    <div className={`system-strip ${error ? "error" : hasWarning ? "warning" : ""}`}>
-      {error ? <AlertCircle size={17} /> : hasWarning ? <Info size={17} /> : <ShieldCheck size={17} />}
-      <span>
-        {error ||
-          (hasWarning
-            ? `已跳过 ${invalidWallets.length} 个无效地址，合并 ${duplicateCount} 个重复地址`
-            : progress)}
-      </span>
-      <button type="button" onClick={onOpenWalletEditor}>
-        钱包列表
-      </button>
-    </div>
-  );
-}
-
-function WalletEditor({
+function WalletManagementPage({
   walletsText,
   accessPassword,
+  records,
   validCount,
   invalidCount,
+  duplicateCount,
+  archivedWallets,
+  anyRunning,
   onWalletsTextChange,
   onAccessPasswordChange,
-  onClose,
+  onScanAll,
+  onForceScanAll,
+  onRenameWallet,
 }: {
   walletsText: string;
   accessPassword: string;
+  records: WalletArchiveRecord[];
   validCount: number;
   invalidCount: number;
+  duplicateCount: number;
+  archivedWallets: number;
+  anyRunning: boolean;
   onWalletsTextChange: (value: string) => void;
   onAccessPasswordChange: (value: string) => void;
-  onClose: () => void;
+  onScanAll: () => void;
+  onForceScanAll: () => void;
+  onRenameWallet: (address: string) => void;
 }) {
+  const runningCount = records.filter((record) => record.state === "running").length;
+  const failedCount = records.filter((record) => record.state === "error").length;
+  const pendingCount = records.filter((record) => !record.result && record.state !== "running" && record.state !== "error").length;
+  const walletLineCount = walletsText.split(/\n+/).filter((line) => line.trim()).length;
+  const archivedPercent = validCount > 0 ? Math.round((archivedWallets / validCount) * 100) : 0;
+  const accessCodeState = accessPassword ? "已填写" : "未填写";
+
   return (
-    <section className="wallet-editor-panel">
-      <div className="editor-title">
-        <div>
-          <h2>钱包列表</h2>
-          <span>一行一个地址。有效 {validCount} 个，无效 {invalidCount} 个。</span>
+    <section className="work-page wallet-management-page">
+      <section className="wallet-command-strip">
+        <div className="wallet-command-copy">
+          <span>钱包源</span>
+          <strong>{validCount} 个有效地址</strong>
+          <p>{invalidCount || duplicateCount ? `有 ${invalidCount} 个无效行、${duplicateCount} 个重复行需要处理。` : "地址格式正常，可以直接刷新新增交易。"}</p>
         </div>
-        <button type="button" onClick={onClose} title="关闭钱包列表">
-          <X size={18} />
-        </button>
-      </div>
-      <div className="editor-grid">
-        <label className="editor-field wallet-textarea">
-          <span>
-            <Wallet size={16} /> 钱包地址
-          </span>
-          <textarea value={walletsText} onChange={(event) => onWalletsTextChange(event.target.value)} spellCheck={false} />
-        </label>
-        <label className="editor-field">
-          <span>
-            <LockKeyhole size={16} /> 私有访问码
-          </span>
-          <input
-            type="password"
-            value={accessPassword}
-            onChange={(event) => onAccessPasswordChange(event.target.value)}
-            placeholder="私人部署需要时填写"
-            autoComplete="current-password"
-          />
-          <small>只保存在本机浏览器，用于访问你的私有后端 API。</small>
-        </label>
+        <div className="wallet-command-metrics">
+          <MetricLine label="已归档" value={`${archivedWallets}/${validCount || 0}`} />
+          <MetricLine label="待扫描" value={String(pendingCount)} />
+          <MetricLine label="失败" value={String(failedCount)} />
+          <MetricLine label="访问码" value={accessCodeState} />
+        </div>
+        <div className="wallet-management-actions">
+          <button type="button" onClick={onScanAll} disabled={anyRunning || validCount === 0}>
+            <RefreshCcw size={16} />
+            刷新新增交易
+          </button>
+          <button type="button" onClick={onForceScanAll} disabled={anyRunning || validCount === 0} className="danger-action">
+            <RefreshCcw size={16} />
+            强制重扫全部
+          </button>
+        </div>
+      </section>
+
+      <div className="wallet-management-grid">
+        <section className="wallet-editor-surface">
+          <div className="wallet-editor-head">
+            <div>
+              <span>源数据</span>
+              <h2>钱包地址</h2>
+            </div>
+            <em>{walletLineCount} 行</em>
+          </div>
+
+          <label className="wallet-address-editor">
+            <span>
+              <Wallet size={16} /> 名称与地址
+            </span>
+            <textarea
+              value={walletsText}
+              onChange={(event) => onWalletsTextChange(event.target.value)}
+              placeholder="MyanDong 0x..."
+              spellCheck={false}
+            />
+            <small>支持一行一个地址，也支持「名称 地址」。</small>
+          </label>
+
+          <label className="access-code-panel">
+            <span>
+              <LockKeyhole size={16} /> 私有访问码
+            </span>
+            <input
+              type="password"
+              value={accessPassword}
+              onChange={(event) => onAccessPasswordChange(event.target.value)}
+              placeholder="私人部署需要时填写"
+              autoComplete="current-password"
+            />
+            <small>只保存在本机浏览器。</small>
+          </label>
+        </section>
+
+        <aside className="wallet-management-side">
+          <section className="wallet-side-panel">
+            <div className="settings-card-title">
+              <Gauge size={18} />
+              <h2>归档状态</h2>
+            </div>
+            <div className="wallet-archive-meter">
+              <div>
+                <strong>{archivedPercent}%</strong>
+                <span>{archivedWallets}/{validCount || 0} 已归档</span>
+              </div>
+              <div className="progress-track">
+                <span style={{ width: `${archivedPercent}%` }} />
+              </div>
+            </div>
+            <div className="wallet-mini-grid">
+              <MetricLine label="扫描中" value={String(runningCount)} />
+              <MetricLine label="待扫描" value={String(pendingCount)} />
+              <MetricLine label="失败" value={String(failedCount)} />
+              <MetricLine label="重复行" value={String(duplicateCount)} />
+            </div>
+          </section>
+
+          <section className="wallet-side-panel wallet-preview-panel">
+            <div className="settings-card-title">
+              <WalletCards size={18} />
+              <h2>当前钱包</h2>
+            </div>
+            <div className="wallet-current-list">
+              {records.map((record, index) => (
+                <article key={record.address} className="wallet-current-row">
+                  <div className="wallet-avatar">{walletDisplayName(record, index).slice(0, 1).toUpperCase()}</div>
+                  <div>
+                    <strong>{walletDisplayName(record, index)}</strong>
+                    <span>{shortAddress(record.address)}</span>
+                  </div>
+                  <em className={`wallet-current-status ${walletManagementStatus(record).tone}`}>
+                    {walletManagementStatus(record).label}
+                  </em>
+                  <button
+                    type="button"
+                    className="wallet-current-action"
+                    onClick={() => onRenameWallet(record.address)}
+                    title={`重命名 ${walletDisplayName(record, index)}`}
+                  >
+                    <PencilLine size={13} />
+                    重命名
+                  </button>
+                </article>
+              ))}
+              {records.length === 0 && <div className="empty-detail-state">暂无钱包。</div>}
+            </div>
+          </section>
+        </aside>
       </div>
     </section>
   );
@@ -680,26 +1009,26 @@ function WalletTablePanel({
   records,
   totalRecords,
   endDate,
-  targetDaily,
+  targetTotal,
   selectedWallet,
   disabled,
   onSelectWallet,
   onScanWallet,
   onRefreshWallet,
   onForceScanWallet,
-  onOpenWalletEditor,
+  onRenameWallet,
 }: {
   records: WalletArchiveRecord[];
   totalRecords: number;
   endDate: string;
-  targetDaily: number | null;
+  targetTotal: number | null;
   selectedWallet: string;
   disabled: boolean;
   onSelectWallet: (address: string) => void;
   onScanWallet: (address: string) => void;
   onRefreshWallet: (address: string) => void;
   onForceScanWallet: (address: string) => void;
-  onOpenWalletEditor: () => void;
+  onRenameWallet: (address: string) => void;
 }) {
   return (
     <section className="wallet-table-card">
@@ -708,10 +1037,6 @@ function WalletTablePanel({
           <h2>所有钱包</h2>
           <span>{records.length} / {totalRecords} 条</span>
         </div>
-        <button type="button" onClick={onOpenWalletEditor}>
-          <Upload size={16} />
-          导入钱包
-        </button>
       </div>
 
       <div className="table-scroll">
@@ -735,20 +1060,21 @@ function WalletTablePanel({
                 record={record}
                 index={index}
                 endDate={endDate}
-                targetDaily={targetDaily}
+                targetTotal={targetTotal}
                 selected={selectedWallet === record.address}
                 disabled={disabled}
                 onSelect={() => onSelectWallet(record.address)}
                 onScan={() => onScanWallet(record.address)}
                 onRefresh={() => onRefreshWallet(record.address)}
                 onForceScan={() => onForceScanWallet(record.address)}
+                onRename={() => onRenameWallet(record.address)}
               />
             ))}
             {records.length === 0 && (
               <tr>
-                <td colSpan={8} className="empty-row">
-                  当前筛选下没有钱包。打开钱包列表添加地址或切换筛选条件。
-                </td>
+                  <td colSpan={8} className="empty-row">
+                    当前筛选下没有钱包。请到钱包管理页面添加地址或切换筛选条件。
+                  </td>
               </tr>
             )}
           </tbody>
@@ -762,33 +1088,43 @@ function WalletRow({
   record,
   index,
   endDate,
-  targetDaily,
+  targetTotal,
   selected,
   disabled,
   onSelect,
   onScan,
   onRefresh,
   onForceScan,
+  onRename,
 }: {
   record: WalletArchiveRecord;
   index: number;
   endDate: string;
-  targetDaily: number | null;
+  targetTotal: number | null;
   selected: boolean;
   disabled: boolean;
   onSelect: () => void;
   onScan: () => void;
   onRefresh: () => void;
   onForceScan: () => void;
+  onRename: () => void;
 }) {
   const todayRow = record.result?.dailyRows.find((row) => row.date === endDate);
-  const targetDelta = record.result && targetDaily !== null ? record.result.averageBoostVolume - targetDaily : null;
-  const displayName = walletDisplayName(index);
+  const targetDelta = record.result && targetTotal !== null ? record.result.totalBoostVolume - targetTotal : null;
+  const displayName = walletDisplayName(record, index);
+  const canOpenDetail = Boolean(record.result);
 
   return (
-    <tr className={selected ? "selected-row" : ""}>
+    <tr className={`${selected ? "selected-row" : ""} ${canOpenDetail ? "interactive-row" : ""}`} onClick={canOpenDetail ? onSelect : undefined}>
       <td>
-        <button className="wallet-identity" type="button" onClick={onSelect}>
+        <button
+          className="wallet-identity"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect();
+          }}
+        >
           <span className="wallet-avatar">{displayName.slice(0, 1)}</span>
           <span>
             <strong>{displayName}</strong>
@@ -821,24 +1157,84 @@ function WalletRow({
       </td>
       <td>
         <div className="row-actions">
-          {record.result ? (
+          <button
+            type="button"
+            className="row-rename-button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRename();
+            }}
+            title="重命名钱包"
+          >
+            重命名
+          </button>
+          {record.state === "running" ? (
+            <button type="button" className="row-detail-button" disabled>
+              扫描中
+            </button>
+          ) : record.state === "error" ? (
+            <button
+              type="button"
+              className="row-detail-button error-action"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRefresh();
+              }}
+              disabled={disabled}
+            >
+              重试
+            </button>
+          ) : record.result ? (
             <>
-              <button type="button" className="row-detail-button" onClick={onSelect}>
-                查看详情
+              <button
+                type="button"
+                className="row-detail-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelect();
+                }}
+              >
+                详情
                 <ChevronRight size={15} />
               </button>
-              <button type="button" className="row-refresh-button" onClick={onRefresh} disabled={disabled} title="只扫描新区块">
+              <button
+                type="button"
+                className="row-refresh-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRefresh();
+                }}
+                disabled={disabled}
+                title="只扫描新区块"
+              >
                 <RefreshCcw size={15} />
-                刷新
+                刷新新增
               </button>
             </>
           ) : (
-            <button type="button" className="row-detail-button" onClick={onScan} disabled={disabled}>
+            <button
+              type="button"
+              className="row-detail-button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onScan();
+              }}
+              disabled={disabled}
+            >
               扫描
             </button>
           )}
           {record.result && (
-            <button type="button" className="row-rescan-button" onClick={onForceScan} disabled={disabled} title="清空该钱包归档后完整重扫">
+            <button
+              type="button"
+              className="row-rescan-button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onForceScan();
+              }}
+              disabled={disabled}
+              title="清空该钱包归档后完整重扫"
+            >
               <RefreshCcw size={15} />
               重扫
             </button>
@@ -896,83 +1292,191 @@ function StatusCell({ record }: { record: WalletArchiveRecord }) {
   );
 }
 
-function OverviewRail({
+function OverviewSummary({
   portfolio,
-  targetDaily,
-  dailyTargetText,
-  onDailyTargetChange,
-  onSync,
-  onOpenDetail,
-  detailDisabled,
+  targetTotal,
+  primaryAction,
+  tenDayTargetText,
+  onTenDayTargetChange,
 }: {
   portfolio: PortfolioSummary;
-  targetDaily: number | null;
-  dailyTargetText: string;
-  onDailyTargetChange: (value: string) => void;
-  onSync: () => void;
-  onOpenDetail: () => void;
-  detailDisabled: boolean;
+  targetTotal: number | null;
+  primaryAction: PrimaryActionModel;
+  tenDayTargetText: string;
+  onTenDayTargetChange: (value: string) => void;
 }) {
+  const equivalentDaily = targetTotal ? formatUsd(targetTotal / 10) : "--";
+  const targetRateLabel = targetTotal ? `${formatNumber(portfolio.targetRate, 1)}%` : "--";
+  const activeQueue = portfolio.runningWallets + portfolio.pendingWallets;
+  const targetTotalForAllWallets = targetTotal ? targetTotal * portfolio.totalWallets : null;
+  const targetTotalLabel = targetTotalForAllWallets ? formatUsd(targetTotalForAllWallets) : "";
+  const decisionText = overviewDecisionText(portfolio, targetTotal, primaryAction);
   return (
-    <aside className="overview-rail">
-      <section className="overview-card">
-        <div className="overview-card-title">
-          <h2>总体概览</h2>
-          <button type="button" onClick={onSync}>
-            <RefreshCcw size={16} />
-            实时更新
-          </button>
-        </div>
-
-        <div className="overview-counts">
-          <MetricLine label="钱包总数" value={String(portfolio.totalWallets)} />
-          <MetricLine label="已归档钱包" value={String(portfolio.archivedWallets)} />
-          <MetricLine label="扫描中钱包" value={String(portfolio.runningWallets)} />
-          <MetricLine label="等待扫描钱包" value={String(portfolio.pendingWallets)} />
-        </div>
-
-        <div className="overview-divider" />
-
-        <div className="overview-metrics">
-          <MetricLine label="10 日合计 Boost" value={formatUsd(portfolio.totalBoostVolume)} strong />
-          <MetricLine label="10 日平均 Boost" value={formatUsd(portfolio.averageBoostVolume)} strong />
-          <MetricLine label="今日 Boost" value={formatUsd(portfolio.todayBoostVolume)} strong />
-        </div>
-
-        <label className="target-input-control">
-          <span>日均目标</span>
-          <input
-            type="number"
-            min="0"
-            step="1"
-            value={dailyTargetText}
-            onChange={(event) => onDailyTargetChange(event.target.value)}
-            placeholder="可选"
-          />
-        </label>
-
-        <div className="target-progress">
-          <div>
-            <span>目标达成率</span>
-            <strong>{targetDaily ? `${formatNumber(portfolio.targetRate, 1)}%` : "--"}</strong>
-          </div>
-          <div className="progress-track">
-            <span style={{ width: `${targetDaily ? Math.min(portfolio.targetRate, 100) : 0}%` }} />
-          </div>
-        </div>
-      </section>
-
-      <section className="detail-entry-card">
+    <section className="overview-summary-card">
+      <div className="overview-card-title">
         <div>
-          <h2>代币与交易明细</h2>
-          <span>查看钱包包含的代币表现与交易明细</span>
+          <span className="overview-kicker">全局达标状态</span>
+          <h2>总体概览</h2>
+          <span>首页只保留所有钱包的达标判断；代币与交易明细从钱包行进入。</span>
         </div>
-        <button type="button" onClick={onOpenDetail} disabled={detailDisabled}>
-          进入查看
-          <ChevronRight size={16} />
-        </button>
-      </section>
-    </aside>
+      </div>
+
+      <div className="overview-summary-grid">
+        <article className="overview-primary-panel">
+          <div>
+            <span>当前总进度</span>
+            <strong>{formatUsd(portfolio.totalBoostVolume)}</strong>
+            {targetTotalLabel && <em>目标 {targetTotalLabel}</em>}
+          </div>
+          <small>{decisionText}</small>
+        </article>
+
+        <article className="overview-target-panel">
+          <label className="target-input-control">
+            <span>单钱包 10 日累计目标</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={tenDayTargetText}
+              onChange={(event) => onTenDayTargetChange(event.target.value)}
+              placeholder={DEFAULT_TEN_DAY_TARGET}
+            />
+            <small>等效日均 {equivalentDaily}</small>
+          </label>
+
+          <div className="target-progress">
+            <div>
+              <span>目标达成率</span>
+              <strong>{targetRateLabel}</strong>
+            </div>
+            <div className="progress-track">
+              <span style={{ width: `${targetTotal ? Math.min(portfolio.targetRate, 100) : 0}%` }} />
+            </div>
+          </div>
+        </article>
+
+        <div className="overview-secondary-grid">
+          <MetricLine label="10 日平均 Boost" value={formatUsd(portfolio.averageBoostVolume)} />
+          <MetricLine label="今日 Boost" value={formatUsd(portfolio.todayBoostVolume)} />
+          <MetricLine label="钱包归档" value={`${portfolio.archivedWallets}/${portfolio.totalWallets}`} />
+          <MetricLine label="待处理钱包" value={String(activeQueue)} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SnapshotForecastPanel({
+  rows,
+  targetTotal,
+  onSelectWallet,
+}: {
+  rows: SnapshotForecastRow[];
+  targetTotal: number | null;
+  onSelectWallet: (address: string) => void;
+}) {
+  const currentRow = rows[0] || null;
+  const hasArchivedWallets = Boolean(currentRow?.archivedWallets);
+  const firstRiskRow = targetTotal && hasArchivedWallets ? rows.find((row) => row.atRiskWallets > 0) || null : null;
+  const allClear = Boolean(targetTotal && hasArchivedWallets && !firstRiskRow);
+  const nextActionText = targetTotal
+    ? !hasArchivedWallets
+      ? "暂无已归档钱包。先扫描或刷新钱包，再判断未来快照风险。"
+      : firstRiskRow
+      ? `${firstRiskRow.runLabel} 有 ${firstRiskRow.atRiskWallets} 个钱包低于 ${formatUsd(targetTotal)}，最大差额 ${formatUsd(firstRiskRow.worstGap)}。`
+      : "当前快照和未来 3 次日结快照按无新增交易估算均达标。"
+    : "先设置单钱包 10 日累计目标，才能判断未来快照风险。";
+
+  return (
+    <section className={`snapshot-forecast-card ${firstRiskRow ? "risk" : "safe"}`}>
+      <div className="forecast-header">
+        <div>
+          <span className="overview-kicker">UTC 日结快照</span>
+          <h2>快照预警</h2>
+          <p>北京时间每日 {SNAPSHOT_CONFIRM_TIME_LABEL} 确认上一 UTC 日；窗口固定为快照日及前 9 天，未来日期默认无新增交易。</p>
+        </div>
+        <div className={allClear ? "forecast-verdict safe" : "forecast-verdict risk"}>
+          {allClear ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+          <strong>{allClear ? "未来 3 天安全" : firstRiskRow ? "需要补量" : hasArchivedWallets ? "等待目标" : "等待归档"}</strong>
+        </div>
+      </div>
+
+      <div className="forecast-decision">
+        <ShieldCheck size={18} />
+        <span>{nextActionText}</span>
+      </div>
+
+      {targetTotal && hasArchivedWallets ? (
+        <div className="forecast-timeline" role="list" aria-label="快照预测列表">
+          {rows.map((row, index) => {
+            const riskWallets = row.walletRows.filter((wallet) => !wallet.targetMet).slice(0, 2);
+            const rowIsRisk = row.atRiskWallets > 0;
+            return (
+              <article className={rowIsRisk ? "forecast-row risk" : "forecast-row safe"} key={row.snapshotDate} role="listitem">
+                <div className="forecast-date">
+                  <span>{index === 0 ? "当前快照" : `未来 +${index} 天`}</span>
+                  <strong>{row.snapshotDate}</strong>
+                  <small>确认时间 {row.runLabel}</small>
+                </div>
+
+                <div className="forecast-window">
+                  <span>统计窗口</span>
+                  <strong>
+                    {row.windowStart} 至 {row.windowEnd}
+                  </strong>
+                  <small>
+                    {index === 0
+                      ? "当前窗口"
+                      : row.expiredBoostVolume > 0
+                        ? `${row.expiredDate} 到期 ${formatUsd(row.expiredBoostVolume)}`
+                        : `${row.expiredDate} 无到期量`}
+                  </small>
+                </div>
+
+                <div className="forecast-total">
+                  <span>归档合计</span>
+                  <strong>{formatUsd(row.totalBoostVolume)}</strong>
+                  <small>{row.targetMetWallets}/{row.archivedWallets} 个钱包达标</small>
+                </div>
+
+                <div className="forecast-status">
+                  <span className={rowIsRisk ? "forecast-status-pill risk" : "forecast-status-pill safe"}>
+                    {rowIsRisk ? "不足" : "达标"}
+                  </span>
+                  <strong>{rowIsRisk ? `${row.atRiskWallets} 个钱包` : "无风险"}</strong>
+                  <small>{rowIsRisk ? `最大差额 ${formatUsd(row.worstGap)}` : "无需补刷"}</small>
+                </div>
+
+                <div className="forecast-wallets">
+                  {rowIsRisk ? (
+                    riskWallets.map((wallet) => (
+                      <button
+                        type="button"
+                        className="forecast-wallet-button"
+                        key={wallet.address}
+                        onClick={() => onSelectWallet(wallet.address)}
+                        title="打开钱包详情"
+                      >
+                        <span>{wallet.name}</span>
+                        <strong>差 {formatUsd(wallet.gap)}</strong>
+                        <ChevronRight size={14} />
+                      </button>
+                    ))
+                  ) : (
+                    <span className="forecast-wallet-empty">已归档钱包都满足目标</span>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="forecast-empty-state">
+          {currentRow?.archivedWallets ? "请先填写目标金额。" : "暂无可预测的已归档钱包。先刷新新增交易或扫描待处理钱包。"}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -985,12 +1489,369 @@ function MetricLine({ label, value, strong = false }: { label: string; value: st
   );
 }
 
+function ScanRecordsPage({
+  records,
+  walletCount,
+  walletNameByAddress,
+}: {
+  records: ScanHistoryRecord[];
+  walletCount: number;
+  walletNameByAddress: Map<string, string>;
+}) {
+  return (
+    <section className="work-page">
+      <PageHeader
+        icon={ClipboardList}
+        title="扫描记录"
+        eyebrow={`${records.length} 条记录 · ${walletCount} 个钱包`}
+        description="这里只记录真正发生过的扫描、增量刷新和强制重扫，用来判断是否重复扫、是否命中增量、失败在哪里。"
+      />
+
+      <div className="audit-table-card">
+        <div className="table-card-header">
+          <div>
+            <h2>最近扫描</h2>
+            <span>{records.length}</span>
+          </div>
+        </div>
+        <div className="table-scroll audit-table-scroll">
+          <table className="compact-table audit-table">
+            <thead>
+              <tr>
+                <th>完成时间</th>
+                <th>钱包</th>
+                <th>方式</th>
+                <th>状态</th>
+                <th>来源</th>
+                <th>区块范围</th>
+                <th>新增 / 总交易</th>
+                <th>耗时</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record) => (
+                <tr key={record.id}>
+                  <td>
+                    {formatSavedAt(record.endedAt)}
+                    <small>{record.snapshotDate} 快照</small>
+                  </td>
+                  <td>
+                    {walletNameLabel(record.address, walletNameByAddress)}
+                    <small>{shortAddress(record.address)}</small>
+                  </td>
+                  <td>{scanModeLabel(record.mode)}</td>
+                  <td>
+                    <span className={`scan-status ${record.status}`}>{scanStatusLabel(record)}</span>
+                  </td>
+                  <td>{record.source ? discoverySourceLabel(record.source) : "--"}</td>
+                  <td>
+                    {blockRangeLabel(record)}
+                    {record.incrementalFromBlock && <small>增量起点 {formatNumber(record.incrementalFromBlock, 0)}</small>}
+                  </td>
+                  <td>
+                    {typeof record.newTxCount === "number" ? record.newTxCount : "--"} /{" "}
+                    {typeof record.totalTxCount === "number" ? record.totalTxCount : "--"}
+                    {record.warningCount ? <small>{record.warningCount} 条提示</small> : null}
+                  </td>
+                  <td>
+                    {formatDuration(record.durationMs)}
+                    {record.error && <small>{record.error}</small>}
+                  </td>
+                </tr>
+              ))}
+              {records.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="empty-row">
+                    还没有扫描记录。先在总览里扫描或刷新一个钱包。
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReportsPage({
+  records,
+  portfolio,
+  endDate,
+  targetTotal,
+  onSelectWallet,
+}: {
+  records: WalletArchiveRecord[];
+  portfolio: PortfolioSummary;
+  endDate: string;
+  targetTotal: number | null;
+  onSelectWallet: (address: string) => void;
+}) {
+  const dailyRows = buildDailyPortfolioRows(records);
+  const rankingRows = buildWalletRankingRows(records, endDate, targetTotal);
+  const sourceRows = buildSourceBreakdownRows(records);
+  const targetTotalForAllWallets = targetTotal ? targetTotal * records.length : 0;
+  const nextAction = targetTotal
+    ? portfolio.targetGap > 0
+      ? `还差 ${formatUsd(portfolio.targetGap)}，优先刷新目标差额最大的已归档钱包。`
+      : `已超出目标 ${formatUsd(Math.abs(portfolio.targetGap))}，保持今日归档即可。`
+    : "填写 10 日累计目标后，系统会给出达标差额。";
+
+  return (
+    <section className="work-page">
+      <PageHeader
+        icon={Gauge}
+        title="统计报表"
+        eyebrow={`快照 ${endDate} · ${portfolio.archivedWallets}/${portfolio.totalWallets} 已归档`}
+        description="报表只回答一个问题：按当前归档和加成规则，哪些钱包还没达到 10 日累计目标。"
+      />
+
+      <div className="report-metric-grid">
+        <MetricPanel label="10 日累计 Boost" value={formatUsd(portfolio.totalBoostVolume)} />
+        <MetricPanel label="总目标" value={targetTotal ? formatUsd(targetTotalForAllWallets) : "--"} />
+        <MetricPanel label="目标差额" value={targetTotal ? targetGapLabel(portfolio.targetGap) : "--"} tone={portfolio.targetGap > 0 ? "danger" : "success"} />
+        <MetricPanel label="达成率" value={targetTotal ? `${formatNumber(portfolio.targetRate, 1)}%` : "--"} />
+      </div>
+
+      <div className="decision-card">
+        <ShieldCheck size={18} />
+        <span>{nextAction}</span>
+      </div>
+
+      <div className="report-grid">
+        <section className="audit-table-card">
+          <div className="table-card-header">
+            <div>
+              <h2>钱包达标排序</h2>
+              <span>{rankingRows.length}</span>
+            </div>
+          </div>
+          <div className="table-scroll report-table-scroll">
+            <table className="compact-table report-wallet-table">
+              <thead>
+                <tr>
+                  <th>钱包</th>
+                  <th>10 日累计</th>
+                  <th>今日</th>
+                  <th>有效交易</th>
+                  <th>目标差额</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rankingRows.map((row) => (
+                  <tr key={row.address}>
+                    <td>
+                      {row.name}
+                      <small>{shortAddress(row.address)}</small>
+                    </td>
+                    <td>
+                      {formatUsd(row.totalBoostVolume)}
+                      <small>日均 {formatUsd(row.averageBoostVolume)}</small>
+                    </td>
+                    <td>{formatUsd(row.todayBoostVolume)}</td>
+                    <td>{row.countedTxCount}</td>
+                    <td>
+                      {row.targetDelta === null ? (
+                        "--"
+                      ) : (
+                        <span className={row.targetDelta >= 0 ? "target-delta positive" : "target-delta negative"}>
+                          {row.targetDelta >= 0 ? "+" : "-"}
+                          {formatUsd(Math.abs(row.targetDelta))}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <button type="button" className="row-detail-button" onClick={() => onSelectWallet(row.address)}>
+                        查看详情
+                        <ChevronRight size={15} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {rankingRows.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="empty-row">
+                      还没有可统计的钱包归档。
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="audit-table-card">
+          <div className="table-card-header">
+            <div>
+              <h2>每日合计</h2>
+              <span>{dailyRows.length}</span>
+            </div>
+          </div>
+          <div className="daily-report-list">
+            {dailyRows.map((row) => (
+              <article className="daily-report-row" key={row.date}>
+                <div>
+                  <strong>{row.date}</strong>
+                  <span>{row.txCount} 笔有效交易</span>
+                </div>
+                <div>
+                  <strong>{formatUsd(row.boostVolume)}</strong>
+                  <span>成交额 {formatUsd(row.tradeUsd, true)}</span>
+                </div>
+              </article>
+            ))}
+            {dailyRows.length === 0 && <div className="empty-detail-state">还没有每日归档数据。</div>}
+          </div>
+        </section>
+
+        <section className="audit-table-card report-side-card">
+          <div className="table-card-header">
+            <div>
+              <h2>来源分布</h2>
+              <span>{sourceRows.length}</span>
+            </div>
+          </div>
+          <div className="source-breakdown">
+            {sourceRows.map((row) => (
+              <article key={row.label}>
+                <div>
+                  <strong>{row.label}</strong>
+                  <span>{row.walletCount} 个钱包</span>
+                </div>
+                <strong>{formatUsd(row.boostVolume)}</strong>
+              </article>
+            ))}
+            {sourceRows.length === 0 && <div className="empty-detail-state">暂无来源数据。</div>}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function SettingsPage({
+  tenDayTargetText,
+  targetTotal,
+  portfolio,
+  scanHistoryCount,
+  anyRunning,
+  onTenDayTargetChange,
+  onClearCache,
+}: {
+  tenDayTargetText: string;
+  targetTotal: number | null;
+  portfolio: PortfolioSummary;
+  scanHistoryCount: number;
+  anyRunning: boolean;
+  onTenDayTargetChange: (value: string) => void;
+  onClearCache: () => void;
+}) {
+  return (
+    <section className="work-page">
+      <PageHeader
+        icon={Settings}
+        title="偏好设置"
+        eyebrow="只保留会影响达标判断的设置"
+        description="分组管理、提醒任务这类暂时不影响主流程的页面先不展开，避免把核心工作流变复杂。"
+      />
+
+      <div className="settings-grid">
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <Gauge size={18} />
+            <h2>达标目标</h2>
+          </div>
+          <label className="target-input-control">
+            <span>单钱包 10 日累计目标</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={tenDayTargetText}
+              onChange={(event) => onTenDayTargetChange(event.target.value)}
+              placeholder={DEFAULT_TEN_DAY_TARGET}
+            />
+            <small>当前等效日均 {targetTotal ? formatUsd(targetTotal / 10) : "--"}。</small>
+          </label>
+          <div className="settings-stat-grid">
+            <MetricLine label="钱包数" value={String(portfolio.totalWallets)} />
+            <MetricLine label="总目标" value={targetTotal ? formatUsd(targetTotal * portfolio.totalWallets) : "--"} />
+            <MetricLine label="达成率" value={targetTotal ? `${formatNumber(portfolio.targetRate, 1)}%` : "--"} />
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <ShieldCheck size={18} />
+            <h2>本地归档</h2>
+          </div>
+          <div className="settings-stat-grid">
+            <MetricLine label="扫描记录" value={String(scanHistoryCount)} />
+            <MetricLine label="已归档钱包" value={String(portfolio.archivedWallets)} />
+            <MetricLine label="待处理钱包" value={String(portfolio.pendingWallets)} />
+          </div>
+          <div className="settings-actions">
+            <button type="button" onClick={onClearCache} disabled={anyRunning}>
+              <X size={16} />
+              清理归档
+            </button>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function PageHeader({
+  icon: Icon,
+  title,
+  eyebrow,
+  description,
+}: {
+  icon: LucideIcon;
+  title: string;
+  eyebrow: string;
+  description: string;
+}) {
+  return (
+    <header className="page-header">
+      <div className="page-header-icon">
+        <Icon size={20} />
+      </div>
+      <div>
+        <span>{eyebrow}</span>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </div>
+    </header>
+  );
+}
+
+function MetricPanel({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "success" | "danger";
+}) {
+  return (
+    <article className={`metric-panel ${tone || ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
 function WalletDetailDrawer({
   record,
   bonusRules,
   onBonusRulesChange,
   onRefresh,
   onForceScan,
+  onRename,
   disabled,
   onClose,
 }: {
@@ -999,6 +1860,7 @@ function WalletDetailDrawer({
   onBonusRulesChange: (value: string) => void;
   onRefresh: () => void;
   onForceScan: () => void;
+  onRename: () => void;
   disabled: boolean;
   onClose: () => void;
 }) {
@@ -1022,12 +1884,15 @@ function WalletDetailDrawer({
       <aside className="detail-drawer" tabIndex={0} aria-label="钱包详情">
         <div className="drawer-header">
           <div>
-            <h2>{shortAddress(record.address)} 详情</h2>
+            <h2>{walletDisplayName(record)} 详情</h2>
             <span>
-              {result.windowStart} 至 {result.windowEnd} · {formatSavedAt(record.savedAt)} · {discoverySourceLabel(result.txDiscoverySource)}
+              {shortAddress(record.address)} · {result.windowStart} 至 {result.windowEnd} · {formatSavedAt(record.savedAt)} · {discoverySourceLabel(result.txDiscoverySource)}
             </span>
           </div>
           <div className="drawer-header-actions">
+            <button type="button" className="drawer-rename-button" onClick={onRename}>
+              重命名
+            </button>
             <button type="button" className="drawer-refresh-button" onClick={onRefresh} disabled={disabled}>
               <RefreshCcw size={15} />
               刷新该钱包
@@ -1129,7 +1994,7 @@ function WalletDetailDrawer({
               {bonusRows.length > 0 ? (
                 <div className="bonus-card-grid" role="region" aria-label="代币额外加成列表" tabIndex={0}>
                   {bonusRows.map((row) => (
-                    <article className="token-bonus-card" key={row.address}>
+                    <article className="token-bonus-card" key={`${row.date}:${row.address}`}>
                       <div className="token-bonus-header">
                         <div className="bonus-token">
                           <strong>{row.symbol}</strong>
@@ -1271,7 +2136,7 @@ function swapStatusLabel(status: "counted" | "excluded" | "partial"): string {
 function buildPortfolioSummary(
   records: WalletArchiveRecord[],
   endDate: string,
-  targetDaily: number | null,
+  targetTotalPerWallet: number | null,
 ): PortfolioSummary {
   let averageBoostVolume = 0;
   let totalBoostVolume = 0;
@@ -1294,9 +2159,9 @@ function buildPortfolioSummary(
     countedTxCount += record.result.swaps.filter((swap) => swap.status === "counted").length;
   }
 
-  const targetTotal = targetDaily === null ? 0 : targetDaily * records.length;
-  const targetGap = targetDaily === null ? 0 : targetTotal - averageBoostVolume;
-  const targetRate = targetTotal > 0 ? (averageBoostVolume / targetTotal) * 100 : 0;
+  const targetTotal = targetTotalPerWallet === null ? 0 : targetTotalPerWallet * records.length;
+  const targetGap = targetTotalPerWallet === null ? 0 : targetTotal - totalBoostVolume;
+  const targetRate = targetTotal > 0 ? (totalBoostVolume / targetTotal) * 100 : 0;
   return {
     totalWallets: records.length,
     archivedWallets,
@@ -1310,6 +2175,208 @@ function buildPortfolioSummary(
     targetGap,
     targetRate,
   };
+}
+
+function buildPrimaryAction(
+  records: WalletArchiveRecord[],
+  portfolio: PortfolioSummary,
+  anyRunning: boolean,
+): PrimaryActionModel {
+  if (records.length === 0) {
+    return {
+      kind: "manage-wallets",
+      label: "去钱包管理",
+      description: "先进入钱包管理页面添加地址",
+    };
+  }
+  if (anyRunning) {
+    return {
+      kind: "running",
+      label: `扫描中 ${portfolio.runningWallets}/${portfolio.totalWallets}`,
+      description: "当前已有钱包在扫描，完成后再执行新操作",
+      disabled: true,
+    };
+  }
+  if (portfolio.failedWallets > 0) {
+    return {
+      kind: "retry-failed",
+      label: "重试失败钱包",
+      description: `${portfolio.failedWallets} 个钱包扫描失败，只重试失败项`,
+    };
+  }
+  if (portfolio.pendingWallets > 0) {
+    return {
+      kind: "scan-pending",
+      label: "扫描待处理钱包",
+      description: `${portfolio.pendingWallets} 个钱包还没有归档结果`,
+    };
+  }
+  return {
+    kind: "refresh-all",
+    label: "刷新新增交易",
+    description: "只补扫归档之后的新区块，不重复完整扫描",
+  };
+}
+
+function overviewDecisionText(
+  portfolio: PortfolioSummary,
+  targetTotalPerWallet: number | null,
+  primaryAction: PrimaryActionModel,
+): string {
+  if (primaryAction.kind === "manage-wallets") return "先到钱包管理页面添加地址。";
+  if (primaryAction.kind === "running") return "正在扫描钱包，保留当前结果并等待完成。";
+  if (primaryAction.kind === "retry-failed") return `${portfolio.failedWallets} 个钱包失败，建议先重试失败钱包。`;
+  if (primaryAction.kind === "scan-pending") return `${portfolio.pendingWallets} 个钱包尚未扫描，先完成归档再判断是否达标。`;
+  if (!targetTotalPerWallet) return "填写 10 日累计目标后显示达标差额。";
+  if (portfolio.targetGap > 0) return `还差 ${formatUsd(portfolio.targetGap)}，优先刷新新增交易。`;
+  if (portfolio.targetGap < 0) return `已超出目标 ${formatUsd(Math.abs(portfolio.targetGap))}，保持归档即可。`;
+  return "刚好达到目标，继续保持当前归档。";
+}
+
+function buildSnapshotForecastRows(
+  records: WalletArchiveRecord[],
+  baseSnapshotDate: string,
+  targetTotalPerWallet: number | null,
+): SnapshotForecastRow[] {
+  if (!isUtcDate(baseSnapshotDate)) return [];
+  return Array.from({ length: 4 }, (_, offset) => {
+    const snapshotDate = addUtcDays(baseSnapshotDate, offset);
+    const { days } = buildUtcWindow(snapshotDate);
+    const daySet = new Set(days);
+    const expiredDate = addUtcDays(snapshotDate, -10);
+    const walletRows = records
+      .map((record, index) => {
+        if (!record.result) return null;
+        const boostVolume = record.result.dailyRows.reduce(
+          (sum, row) => (daySet.has(row.date) ? sum + row.boostVolume : sum),
+          0,
+        );
+        const expiredBoostVolume = record.result.dailyRows.find((row) => row.date === expiredDate)?.boostVolume || 0;
+        const gap = targetTotalPerWallet === null ? 0 : Math.max(0, targetTotalPerWallet - boostVolume);
+        return {
+          address: record.address,
+          name: walletDisplayName(record, index),
+          boostVolume,
+          gap,
+          expiredBoostVolume,
+          targetMet: targetTotalPerWallet !== null && boostVolume >= targetTotalPerWallet,
+        };
+      })
+      .filter((row): row is SnapshotForecastWalletRow => Boolean(row))
+      .sort((a, b) => {
+        if (a.targetMet !== b.targetMet) return a.targetMet ? 1 : -1;
+        if (b.gap !== a.gap) return b.gap - a.gap;
+        return a.boostVolume - b.boostVolume;
+      });
+
+    const archivedWallets = walletRows.length;
+    const atRiskWallets = targetTotalPerWallet === null ? 0 : walletRows.filter((row) => !row.targetMet).length;
+    const targetMetWallets = targetTotalPerWallet === null ? 0 : archivedWallets - atRiskWallets;
+    const totalBoostVolume = walletRows.reduce((sum, row) => sum + row.boostVolume, 0);
+    const expiredBoostVolume = walletRows.reduce((sum, row) => sum + row.expiredBoostVolume, 0);
+    const worstGap = walletRows.reduce((max, row) => Math.max(max, row.gap), 0);
+
+    return {
+      snapshotDate,
+      runLabel: `${formatToolbarDate(addUtcDays(snapshotDate, 1))} ${SNAPSHOT_CONFIRM_TIME_LABEL}`,
+      windowStart: days[0],
+      windowEnd: days[days.length - 1],
+      expiredDate,
+      archivedWallets,
+      targetMetWallets,
+      atRiskWallets,
+      totalBoostVolume,
+      expiredBoostVolume,
+      worstGap,
+      walletRows,
+    };
+  });
+}
+
+function buildDailyPortfolioRows(records: WalletArchiveRecord[]): DailyPortfolioRow[] {
+  const rows = new Map<string, DailyPortfolioRow>();
+  for (const record of records) {
+    if (!record.result) continue;
+    for (const row of record.result.dailyRows) {
+      const existing = rows.get(row.date) || { date: row.date, boostVolume: 0, tradeUsd: 0, txCount: 0 };
+      existing.boostVolume += row.boostVolume;
+      existing.tradeUsd += row.tradeUsd;
+      existing.txCount += row.txCount;
+      rows.set(row.date, existing);
+    }
+  }
+  return [...rows.values()].sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function buildWalletRankingRows(
+  records: WalletArchiveRecord[],
+  endDate: string,
+  targetTotal: number | null,
+): WalletRankingRow[] {
+  return records
+    .map((record, index) => {
+      if (!record.result) return null;
+      const todayBoostVolume = record.result.dailyRows.find((row) => row.date === endDate)?.boostVolume || 0;
+      const countedTxCount = record.result.swaps.filter((swap) => swap.status === "counted").length;
+      return {
+        address: record.address,
+        name: walletDisplayName(record, index),
+        totalBoostVolume: record.result.totalBoostVolume,
+        averageBoostVolume: record.result.averageBoostVolume,
+        todayBoostVolume,
+        countedTxCount,
+        targetDelta: targetTotal === null ? null : record.result.totalBoostVolume - targetTotal,
+      };
+    })
+    .filter((row): row is WalletRankingRow => Boolean(row))
+    .sort((a, b) => {
+      if (a.targetDelta !== null && b.targetDelta !== null && a.targetDelta !== b.targetDelta) {
+        return a.targetDelta - b.targetDelta;
+      }
+      return b.totalBoostVolume - a.totalBoostVolume;
+    });
+}
+
+function buildSourceBreakdownRows(records: WalletArchiveRecord[]): SourceBreakdownRow[] {
+  const rows = new Map<string, SourceBreakdownRow>();
+  for (const record of records) {
+    if (!record.result) continue;
+    const source = record.result.txDiscoverySource || "archive";
+    const label = discoverySourceLabel(source);
+    const existing = rows.get(label) || {
+      source,
+      label,
+      walletCount: 0,
+      boostVolume: 0,
+    };
+    existing.walletCount += 1;
+    existing.boostVolume += record.result.totalBoostVolume;
+    rows.set(label, existing);
+  }
+  return [...rows.values()].sort((a, b) => b.boostVolume - a.boostVolume);
+}
+
+function buildArchiveHistoryRecords(records: WalletArchiveRecord[], endDate: string): ScanHistoryRecord[] {
+  return records
+    .filter((record) => record.result && record.savedAt)
+    .map((record) => ({
+      id: `archive:${record.address}:${endDate}:${record.savedAt}`,
+      address: record.address,
+      snapshotDate: endDate,
+      mode: "archive" as const,
+      status: "success" as const,
+      startedAt: record.savedAt || "",
+      endedAt: record.savedAt || "",
+      durationMs: 0,
+      source: record.source === "archive" ? "archive" : record.result?.txDiscoverySource,
+      scannedFromBlock: record.result?.scannedFromBlock,
+      scannedToBlock: record.result?.scannedToBlock,
+      incrementalFromBlock: record.result?.incrementalFromBlock,
+      newTxCount: record.result?.incrementalNewTxCount,
+      totalTxCount: record.result?.swaps.length,
+      warningCount: visibleWarnings(record.result?.warnings || []).length,
+    }))
+    .sort((a, b) => b.endedAt.localeCompare(a.endedAt));
 }
 
 function filterWalletRecords(records: WalletArchiveRecord[], filter: WalletFilter): WalletArchiveRecord[] {
@@ -1415,38 +2482,52 @@ function applyBonusRules(result: CalculationResult, bonusRules: string, walletAd
   };
 }
 
-function parseWalletList(raw: string): { addresses: string[]; invalid: string[]; duplicateCount: number } {
+function parseWalletList(raw: string): ParsedWalletList {
   const seen = new Set<string>();
+  const entries: WalletListEntry[] = [];
   const invalid: string[] = [];
   let duplicateCount = 0;
 
-  for (const chunk of raw.split(/[\s,，;；]+/)) {
-    const candidate = chunk.trim();
-    if (!candidate) continue;
-    if (!isAddress(candidate)) {
-      invalid.push(candidate);
+  for (const rawLine of raw.split(/\n+/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const matches = [...line.matchAll(ADDRESS_PATTERN)];
+    if (matches.length === 0) {
+      for (const chunk of line.split(/[\s,，;；]+/)) {
+        const candidate = chunk.trim();
+        if (candidate) invalid.push(candidate);
+      }
       continue;
     }
-    const normalized = normalizeAddress(candidate);
-    if (seen.has(normalized)) {
-      duplicateCount += 1;
-      continue;
+
+    for (const match of matches) {
+      const address = match[0];
+      const normalized = normalizeAddress(address);
+      if (seen.has(normalized)) {
+        duplicateCount += 1;
+        continue;
+      }
+      seen.add(normalized);
+      entries.push({
+        address: normalized,
+        name: cleanWalletName(line.replace(ADDRESS_PATTERN, " ")),
+      });
     }
-    seen.add(normalized);
   }
 
-  return { addresses: [...seen], invalid, duplicateCount };
+  return { entries, addresses: entries.map((entry) => entry.address), invalid, duplicateCount };
 }
 
-function syncWalletRecords(current: WalletArchiveRecord[], addresses: string[], endDate: string): WalletArchiveRecord[] {
+function syncWalletRecords(current: WalletArchiveRecord[], entries: WalletListEntry[], endDate: string): WalletArchiveRecord[] {
   const currentByAddress = new Map(current.map((record) => [record.address, record]));
-  return addresses.map((address) => {
+  return entries.map(({ address, name }) => {
     const existing = currentByAddress.get(address);
-    if (existing?.state === "running") return existing;
+    if (existing?.state === "running") return { ...existing, name };
     const persisted = readPersistedResult(address, endDate);
     if (persisted) {
       return {
         address,
+        name,
         state: "done",
         source: "archive",
         result: persisted.result,
@@ -1455,9 +2536,12 @@ function syncWalletRecords(current: WalletArchiveRecord[], addresses: string[], 
         savedAt: persisted.savedAt,
       };
     }
-    if (existing && existing.result && existing.source === "fresh") return existing;
+    if (existing && existing.result && existing.source === "fresh" && existing.result.windowEnd === endDate) {
+      return { ...existing, name };
+    }
     return {
       address,
+      name,
       state: "idle",
       source: "empty",
       result: null,
@@ -1465,6 +2549,23 @@ function syncWalletRecords(current: WalletArchiveRecord[], addresses: string[], 
       error: "",
     };
   });
+}
+
+function cleanWalletName(raw: string): string {
+  return raw.replace(/[=：:|,，;；]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function updateWalletNameInText(raw: string, address: string, nextNameRaw: string): string {
+  const normalizedAddress = normalizeAddress(address);
+  const nextName = cleanWalletName(nextNameRaw);
+  const parsed = parseWalletList(raw);
+  const entries = parsed.entries.map((entry) =>
+    entry.address === normalizedAddress ? { ...entry, name: nextName } : entry,
+  );
+  if (!entries.some((entry) => entry.address === normalizedAddress)) {
+    entries.push({ address: normalizedAddress, name: nextName });
+  }
+  return entries.map((entry) => (entry.name ? `${entry.name} ${entry.address}` : entry.address)).join("\n");
 }
 
 function scopedBonusMultiplierForSwap(swap: ParsedSwap, rules: ScopedBonusRules, wallet: string): number {
@@ -1555,6 +2656,13 @@ function isUtcDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+function addUtcDays(value: string, offset: number): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
 function multiplierToPercentInput(multiplier: number): string {
   const percent = (multiplier - 1) * 100;
   return percent > 0 ? formatPercentRule(percent) : "";
@@ -1574,8 +2682,22 @@ function shortAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-function walletDisplayName(index: number): string {
-  return index === 0 ? "MyanDong" : `Wallet-${String(index + 1).padStart(2, "0")}`;
+function walletDisplayName(record: WalletArchiveRecord, index?: number): string {
+  if (record.name) return record.name;
+  if (typeof index === "number") return index === 0 ? "MyanDong" : `Wallet-${String(index + 1).padStart(2, "0")}`;
+  return shortAddress(record.address);
+}
+
+function walletManagementStatus(record: WalletArchiveRecord): { label: string; tone: string } {
+  if (record.result) return { label: "已归档", tone: "done" };
+  if (record.state === "running") return { label: "扫描中", tone: "running" };
+  if (record.state === "error") return { label: "失败", tone: "error" };
+  return { label: "待扫描", tone: "pending" };
+}
+
+function walletNameLabel(address: string, walletNameByAddress: Map<string, string>): string {
+  const name = walletNameByAddress.get(normalizeAddress(address));
+  return name || shortAddress(address);
 }
 
 function lastScanLabel(record: WalletArchiveRecord): string {
@@ -1588,6 +2710,37 @@ function lastScanLabel(record: WalletArchiveRecord): string {
   return "未开始";
 }
 
+function viewMetaFor(view: AppView, targetTotal: number | null): { title: string; subtitle: string } {
+  if (view === "scan-records") {
+    return {
+      title: "OKX Boost 扫描记录",
+      subtitle: "本地归档 · 增量刷新 · 强制重扫审计",
+    };
+  }
+  if (view === "wallets") {
+    return {
+      title: "OKX Boost 钱包管理",
+      subtitle: "钱包名称 · 地址 · 私有访问码",
+    };
+  }
+  if (view === "reports") {
+    return {
+      title: "OKX Boost 统计报表",
+      subtitle: `单钱包 10 日累计目标 ${targetTotal ? formatUsd(targetTotal) : "--"}`,
+    };
+  }
+  if (view === "settings") {
+    return {
+      title: "OKX Boost 偏好设置",
+      subtitle: "达标目标与本地归档管理",
+    };
+  }
+  return {
+    title: "OKX Boost 钱包总览",
+    subtitle: "BNB Chain · 最近 10 天 Boost 交易归档",
+  };
+}
+
 function discoverySourceLabel(source: CalculationResult["txDiscoverySource"]): string {
   if (source === "ankr") return "Ankr 索引";
   if (source === "explorer") return "Explorer 索引";
@@ -1595,6 +2748,54 @@ function discoverySourceLabel(source: CalculationResult["txDiscoverySource"]): s
   if (source === "import") return "导入记录";
   if (source === "archive") return "本地归档";
   return "已归档";
+}
+
+function scanModeFromOptions(options: ScanWalletOptions): ScanMode {
+  if (options.forceRefresh) return "rescan";
+  if (options.refresh) return "refresh";
+  return "scan";
+}
+
+function scanModeLabel(mode: ScanMode): string {
+  if (mode === "refresh") return "增量刷新";
+  if (mode === "rescan") return "强制重扫";
+  if (mode === "archive") return "归档记录";
+  return "首次扫描";
+}
+
+function scanStatusLabel(record: ScanHistoryRecord): string {
+  if (record.status === "success") return "成功";
+  return record.error ? "失败" : "异常";
+}
+
+function blockRangeLabel(record: ScanHistoryRecord): string {
+  if (record.scannedFromBlock && record.scannedToBlock) {
+    return `${formatNumber(record.scannedFromBlock, 0)} - ${formatNumber(record.scannedToBlock, 0)}`;
+  }
+  if (record.scannedToBlock) return `至 ${formatNumber(record.scannedToBlock, 0)}`;
+  return "--";
+}
+
+function formatDuration(durationMs: number): string {
+  if (!durationMs) return "--";
+  if (durationMs < 1000) return `${durationMs}ms`;
+  const seconds = durationMs / 1000;
+  if (seconds < 60) return `${formatNumber(seconds, 1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${restSeconds}s`;
+}
+
+function targetGapLabel(gap: number): string {
+  if (gap > 0) return `还差 ${formatUsd(gap)}`;
+  if (gap < 0) return `超出 ${formatUsd(Math.abs(gap))}`;
+  return formatUsd(0);
+}
+
+function formatToolbarDate(value: string): string {
+  const [year, month, day] = value.split("-");
+  if (!year || !month || !day) return value;
+  return `${year}/${month}/${day}`;
 }
 
 function formatSavedAt(savedAt?: string): string {
@@ -1632,6 +2833,7 @@ function readPersistedUiState(): PersistedUiState {
     return {
       ...state,
       walletFilter: isWalletFilter(state.walletFilter) ? state.walletFilter : "all",
+      currentView: isAppView(state.currentView) ? state.currentView : "overview",
     };
   } catch {
     storage.removeItem(UI_STATE_KEY);
@@ -1695,6 +2897,29 @@ function clearPersistedResults(): number {
   return removed;
 }
 
+function readPersistedScanHistory(): ScanHistoryRecord[] {
+  const storage = safeStorage();
+  if (!storage) return [];
+  try {
+    const parsed = JSON.parse(storage.getItem(SCAN_HISTORY_KEY) || "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isScanHistoryRecord).slice(0, MAX_SCAN_HISTORY_RECORDS);
+  } catch {
+    storage.removeItem(SCAN_HISTORY_KEY);
+    return [];
+  }
+}
+
+function writePersistedScanHistory(records: ScanHistoryRecord[]) {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(SCAN_HISTORY_KEY, JSON.stringify(records.slice(0, MAX_SCAN_HISTORY_RECORDS)));
+  } catch {
+    // Scan history is an audit convenience. Ignore quota failures.
+  }
+}
+
 function isPersistedResultRecord(value: unknown): value is PersistedResultRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as PersistedResultRecord;
@@ -1709,6 +2934,29 @@ function isCalculationResult(value: unknown): value is CalculationResult {
 
 function isWalletFilter(value: unknown): value is WalletFilter {
   return value === "all" || value === "archived" || value === "running" || value === "pending" || value === "error";
+}
+
+function isAppView(value: unknown): value is AppView {
+  return value === "overview" || value === "wallets" || value === "scan-records" || value === "reports" || value === "settings";
+}
+
+function isScanHistoryRecord(value: unknown): value is ScanHistoryRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as ScanHistoryRecord;
+  return (
+    typeof record.id === "string" &&
+    typeof record.address === "string" &&
+    typeof record.snapshotDate === "string" &&
+    isScanMode(record.mode) &&
+    (record.status === "success" || record.status === "error") &&
+    typeof record.startedAt === "string" &&
+    typeof record.endedAt === "string" &&
+    typeof record.durationMs === "number"
+  );
+}
+
+function isScanMode(value: unknown): value is ScanMode {
+  return value === "scan" || value === "refresh" || value === "rescan" || value === "archive";
 }
 
 async function runWithConcurrency<T>(

@@ -11,7 +11,26 @@
   子 todo：[S2 交互与归档完善](./todos/2026-05-07-interaction-archive-polish.md)
 - [ ] S3 完成文档与部署同步  
   子 todo：[S3 文档与部署同步](./todos/2026-05-07-docs-deploy-sync.md)
-- [ ] S4 开发侧边栏其余小功能页面
+- [x] S4 开发侧边栏其余小功能页面
+  子 todo：[S4 小功能页面](./todos/2026-05-07-secondary-pages-score-model.md)
+- [x] S5 抛光总体概览布局
+  子 todo：[S5 总体概览布局抛光](./todos/2026-05-08-overview-layout-polish.md)
+- [x] S6 改良行动驱动交互
+  子 todo：[S6 行动驱动交互改良](./todos/2026-05-08-action-driven-interactions.md)
+- [x] S7 清理网页端首屏布局问题
+  子 todo：[S7 网页端布局清理](./todos/2026-05-08-web-layout-cleanup.md)
+- [x] S8 删除跨页面重复状态条
+  子 todo：[S8 删除全局状态条](./todos/2026-05-08-remove-global-status-strip.md)
+- [x] S9 修复日期选择并支持钱包重命名
+  子 todo：[S9 日期选择与钱包重命名](./todos/2026-05-08-date-picker-wallet-renaming.md)
+- [x] S10 重构钱包管理为独立页面
+  子 todo：[S10 钱包管理独立页面](./todos/2026-05-08-wallet-management-page.md)
+- [x] S11 重构钱包管理页布局
+  子 todo：[S11 钱包管理页布局重构](./todos/2026-05-08-wallet-management-layout.md)
+- [x] S12 补齐钱包管理页重命名入口
+  子 todo：[S12 钱包管理页重命名入口](./todos/2026-05-08-wallet-management-rename-entry.md)
+- [x] S13 增加快照预警与未来 3 天预测
+  子 todo：[S13 快照预警与未来 3 天预测](./todos/2026-05-09-snapshot-forecast-alerts.md)
 
 ## 维护规则
 
