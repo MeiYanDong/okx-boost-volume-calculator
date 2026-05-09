@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 const maxBodyBytes = 1_000_000;
 const upstreamTimeoutMs = 25_000;
 const allowedRpcMethods = new Set([
@@ -18,6 +20,8 @@ export function createProxyConfig(env) {
       deriveAnkrMultichainUrl(envValue(env, "BSC_RPC_URL", "VITE_BSC_RPC_URL")),
     etherscanApiKey: envValue(env, "ETHERSCAN_API_KEY", "VITE_ETHERSCAN_API_KEY"),
     etherscanApiUrl: "https://api.etherscan.io/v2/api",
+    feishuWebhookUrl: envValue(env, "FEISHU_WEBHOOK_URL"),
+    feishuWebhookSecret: envValue(env, "FEISHU_WEBHOOK_SECRET"),
   };
 }
 
@@ -86,6 +90,30 @@ export async function handleExplorerProxy(request, response, config, url = reque
 
   const payload = await getJson(upstream.toString());
   sendJson(response, 200, payload, { "cache-control": "no-store" });
+}
+
+export async function handleFeishuNotify(request, response, config) {
+  if (request.method !== "POST") {
+    sendJson(response, 405, { error: "Use POST" });
+    return;
+  }
+
+  validateAccess(request, config);
+  if (!config.feishuWebhookUrl) {
+    sendJson(response, 400, { error: "Feishu webhook is not configured" }, { "cache-control": "no-store" });
+    return;
+  }
+
+  validateFeishuWebhookUrl(config.feishuWebhookUrl);
+  const body = await readJsonBody(request);
+  const text = validateFeishuNotifyBody(body);
+  const payload = createFeishuTextPayload(text, config);
+  const result = await postJson(config.feishuWebhookUrl, payload);
+  const resultCode = result?.code ?? result?.StatusCode ?? 0;
+  if (Number(resultCode) !== 0) {
+    throw new Error(`Feishu notify failed: ${result?.msg || result?.message || result?.StatusMessage || "unknown error"}`);
+  }
+  sendJson(response, 200, { ok: true }, { "cache-control": "no-store" });
 }
 
 export function handleUnknownApi(response) {
@@ -280,8 +308,47 @@ function isObject(value) {
 
 function redact(value, config) {
   let output = String(value);
-  for (const secret of [config.bscRpcUrl, config.ankrMultichainRpcUrl, config.etherscanApiKey, config.accessPassword]) {
+  for (const secret of [
+    config.bscRpcUrl,
+    config.ankrMultichainRpcUrl,
+    config.etherscanApiKey,
+    config.accessPassword,
+    config.feishuWebhookUrl,
+    config.feishuWebhookSecret,
+  ]) {
     if (secret) output = output.split(secret).join("[redacted]");
   }
   return output;
+}
+
+function validateFeishuNotifyBody(body) {
+  if (!isObject(body) || typeof body.text !== "string") throw new Error("Invalid Feishu notify body");
+  const text = body.text.trim();
+  if (!text) throw new Error("Feishu notify text is empty");
+  if (text.length > 4000) throw new Error("Feishu notify text is too large");
+  return text;
+}
+
+function validateFeishuWebhookUrl(rawUrl) {
+  const url = new URL(rawUrl);
+  const allowedHosts = new Set(["open.feishu.cn", "open.larksuite.com"]);
+  if (url.protocol !== "https:" || !allowedHosts.has(url.hostname) || !url.pathname.startsWith("/open-apis/bot/v2/hook/")) {
+    throw new Error("Feishu webhook URL is invalid");
+  }
+}
+
+function createFeishuTextPayload(text, config) {
+  const payload = {
+    msg_type: "text",
+    content: { text },
+  };
+  if (!config.feishuWebhookSecret) return payload;
+
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const stringToSign = `${timestamp}\n${config.feishuWebhookSecret}`;
+  return {
+    ...payload,
+    timestamp,
+    sign: createHmac("sha256", stringToSign).digest("base64"),
+  };
 }

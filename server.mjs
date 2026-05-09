@@ -8,6 +8,7 @@ import {
   createProxyConfig,
   handleAnkrProxy,
   handleExplorerProxy,
+  handleFeishuNotify,
   handleRpcProxy,
   handleUnknownApi,
   requestUrl,
@@ -52,6 +53,11 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/explorer") {
       await handleExplorerProxy(request, response, config, url);
+      return;
+    }
+
+    if (url.pathname === "/api/feishu") {
+      await handleFeishuNotify(request, response, config);
       return;
     }
 

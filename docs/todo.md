@@ -31,6 +31,8 @@
   子 todo：[S12 钱包管理页重命名入口](./todos/2026-05-08-wallet-management-rename-entry.md)
 - [x] S13 增加快照预警与未来 3 天预测
   子 todo：[S13 快照预警与未来 3 天预测](./todos/2026-05-09-snapshot-forecast-alerts.md)
+- [x] S14 移除清理归档入口并增加飞书通知
+  子 todo：[S14 清理归档入口移除与飞书通知](./todos/2026-05-09-feishu-notification-cleanup.md)
 
 ## 维护规则
 

@@ -58,21 +58,6 @@ export function writeParsedSwapCache(key: string, swap: ParsedSwap) {
   writeCache(key, swap, PARSED_SWAP_TTL_MS);
 }
 
-export function clearOkxBoostCache(): number {
-  const storage = safeStorage();
-  if (!storage) return 0;
-
-  let removed = 0;
-  for (let index = storage.length - 1; index >= 0; index -= 1) {
-    const key = storage.key(index);
-    if (key?.startsWith(CACHE_PREFIX)) {
-      storage.removeItem(key);
-      removed += 1;
-    }
-  }
-  return removed;
-}
-
 function boostBonusSignature(boostBonuses: Record<string, number>): string {
   return Object.entries(boostBonuses)
     .map(([address, multiplier]) => `${normalizeAddress(address)}=${multiplier}`)

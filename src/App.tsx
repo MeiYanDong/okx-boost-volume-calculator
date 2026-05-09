@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   PencilLine,
   RefreshCcw,
+  Send,
   Settings,
   ShieldCheck,
   UserCircle,
@@ -26,9 +27,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { BSC_CHAIN, isAddress, normalizeAddress } from "./lib/chains";
 import { buildUtcWindow, calculateBoostVolume, latestSelectableUtcDate } from "./lib/calculator";
-import { clearOkxBoostCache } from "./lib/cache";
 import { formatNumber, formatUsd, shortHash } from "./lib/format";
-import { readServerAccessPassword, writeServerAccessPassword } from "./lib/serverAccess";
+import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPassword } from "./lib/serverAccess";
 import type { CalculationResult, ParsedSwap, TokenGroup, TokenMeta } from "./lib/types";
 
 const SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
@@ -56,6 +56,10 @@ type PrimaryActionModel = {
   label: string;
   description: string;
   disabled?: boolean;
+};
+type NotifyState = {
+  status: "idle" | "sending" | "sent" | "error";
+  message: string;
 };
 type ScopedBonusRules = {
   scoped: Record<string, number>;
@@ -189,6 +193,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<AppView>(
     isAppView(initialUiState.currentView) ? initialUiState.currentView : "overview",
   );
+  const [notifyState, setNotifyState] = useState<NotifyState>({ status: "idle", message: "" });
   const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
     syncWalletRecords([], parseWalletList(initialWalletsText).entries, initialEndDate),
   );
@@ -477,23 +482,6 @@ export default function App() {
     );
   }
 
-  function clearCache() {
-    clearOkxBoostCache();
-    clearPersistedResults();
-    setRecords((current) =>
-      current.map((record) => ({
-        ...record,
-        state: "idle",
-        source: "empty",
-        result: null,
-        error: "",
-        progress: "本地归档已清理",
-        savedAt: undefined,
-      })),
-    );
-    setSelectedWallet("");
-  }
-
   function updateBonusOverrides(value: string) {
     setBoostOverrides(value);
   }
@@ -508,14 +496,29 @@ export default function App() {
     setSelectedWallet(address);
   }
 
+  async function sendFeishuSnapshotAlert() {
+    const riskRow = snapshotForecastRows.find((row) => row.atRiskWallets > 0);
+    if (!targetTotal || !riskRow || notifyState.status === "sending") return;
+
+    setNotifyState({ status: "sending", message: "飞书提醒发送中..." });
+    try {
+      const response = await fetch("/api/feishu", {
+        method: "POST",
+        headers: serverAccessHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ text: buildFeishuForecastMessage(riskRow, targetTotal) }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setNotifyState({ status: "sent", message: "飞书提醒已发送" });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setNotifyState({ status: "error", message });
+    }
+  }
+
   return (
     <main className="app-frame">
-      <Sidebar
-        currentView={currentView}
-        onViewChange={changeView}
-        onClearCache={clearCache}
-        disabled={anyRunning}
-      />
+      <Sidebar currentView={currentView} onViewChange={changeView} />
 
       <section className="main-workspace">
         <Topbar title={viewMeta.title} subtitle={viewMeta.subtitle} />
@@ -549,6 +552,8 @@ export default function App() {
             <SnapshotForecastPanel
               rows={snapshotForecastRows}
               targetTotal={targetTotal}
+              notifyState={notifyState}
+              onNotify={sendFeishuSnapshotAlert}
               onSelectWallet={setSelectedWallet}
             />
 
@@ -606,9 +611,7 @@ export default function App() {
             targetTotal={targetTotal}
             portfolio={portfolio}
             scanHistoryCount={scanHistoryRows.length}
-            anyRunning={anyRunning}
             onTenDayTargetChange={setTenDayTarget}
-            onClearCache={clearCache}
           />
         )}
 
@@ -632,13 +635,9 @@ export default function App() {
 function Sidebar({
   currentView,
   onViewChange,
-  onClearCache,
-  disabled,
 }: {
   currentView: AppView;
   onViewChange: (view: AppView) => void;
-  onClearCache: () => void;
-  disabled: boolean;
 }) {
   const groups: Array<{
     title?: string;
@@ -681,7 +680,6 @@ function Sidebar({
           active: currentView === "settings",
           onClick: () => onViewChange("settings"),
         },
-        { label: "清理归档", icon: X, onClick: onClearCache, disabled },
       ],
     },
   ];
@@ -1370,10 +1368,14 @@ function OverviewSummary({
 function SnapshotForecastPanel({
   rows,
   targetTotal,
+  notifyState,
+  onNotify,
   onSelectWallet,
 }: {
   rows: SnapshotForecastRow[];
   targetTotal: number | null;
+  notifyState: NotifyState;
+  onNotify: () => void;
   onSelectWallet: (address: string) => void;
 }) {
   const currentRow = rows[0] || null;
@@ -1396,15 +1398,31 @@ function SnapshotForecastPanel({
           <h2>快照预警</h2>
           <p>北京时间每日 {SNAPSHOT_CONFIRM_TIME_LABEL} 确认上一 UTC 日；窗口固定为快照日及前 9 天，未来日期默认无新增交易。</p>
         </div>
-        <div className={allClear ? "forecast-verdict safe" : "forecast-verdict risk"}>
-          {allClear ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-          <strong>{allClear ? "未来 3 天安全" : firstRiskRow ? "需要补量" : hasArchivedWallets ? "等待目标" : "等待归档"}</strong>
+        <div className="forecast-header-actions">
+          <div className={allClear ? "forecast-verdict safe" : "forecast-verdict risk"}>
+            {allClear ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+            <strong>{allClear ? "未来 3 天安全" : firstRiskRow ? "需要补量" : hasArchivedWallets ? "等待目标" : "等待归档"}</strong>
+          </div>
+          {firstRiskRow && (
+            <button
+              type="button"
+              className="forecast-notify-button"
+              onClick={onNotify}
+              disabled={notifyState.status === "sending"}
+            >
+              <Send size={16} />
+              {notifyState.status === "sending" ? "发送中" : "飞书提醒"}
+            </button>
+          )}
         </div>
       </div>
 
       <div className="forecast-decision">
         <ShieldCheck size={18} />
         <span>{nextActionText}</span>
+        {notifyState.message && (
+          <em className={`forecast-notify-status ${notifyState.status}`}>{notifyState.message}</em>
+        )}
       </div>
 
       {targetTotal && hasArchivedWallets ? (
@@ -1735,17 +1753,13 @@ function SettingsPage({
   targetTotal,
   portfolio,
   scanHistoryCount,
-  anyRunning,
   onTenDayTargetChange,
-  onClearCache,
 }: {
   tenDayTargetText: string;
   targetTotal: number | null;
   portfolio: PortfolioSummary;
   scanHistoryCount: number;
-  anyRunning: boolean;
   onTenDayTargetChange: (value: string) => void;
-  onClearCache: () => void;
 }) {
   return (
     <section className="work-page">
@@ -1790,12 +1804,6 @@ function SettingsPage({
             <MetricLine label="扫描记录" value={String(scanHistoryCount)} />
             <MetricLine label="已归档钱包" value={String(portfolio.archivedWallets)} />
             <MetricLine label="待处理钱包" value={String(portfolio.pendingWallets)} />
-          </div>
-          <div className="settings-actions">
-            <button type="button" onClick={onClearCache} disabled={anyRunning}>
-              <X size={16} />
-              清理归档
-            </button>
           </div>
         </section>
       </div>
@@ -2291,6 +2299,30 @@ function buildSnapshotForecastRows(
       walletRows,
     };
   });
+}
+
+function buildFeishuForecastMessage(row: SnapshotForecastRow, targetTotalPerWallet: number): string {
+  const riskWallets = row.walletRows
+    .filter((wallet) => !wallet.targetMet)
+    .slice(0, 8)
+    .map(
+      (wallet, index) =>
+        `${index + 1}. ${wallet.name} ${shortAddress(wallet.address)}：当前 ${formatUsd(wallet.boostVolume)}，差 ${formatUsd(wallet.gap)}`,
+    );
+
+  return [
+    "OKX Boost 日结快照预警",
+    `确认时间：${row.runLabel} 北京时间`,
+    `快照日：${row.snapshotDate}`,
+    `统计窗口：${row.windowStart} 至 ${row.windowEnd}`,
+    `单钱包目标：${formatUsd(targetTotalPerWallet)}`,
+    `风险钱包：${row.atRiskWallets}/${row.archivedWallets}`,
+    `最大差额：${formatUsd(row.worstGap)}`,
+    `到期日期：${row.expiredDate}${row.expiredBoostVolume > 0 ? `，到期量 ${formatUsd(row.expiredBoostVolume)}` : ""}`,
+    "",
+    "需要处理的钱包：",
+    riskWallets.length ? riskWallets.join("\n") : "暂无",
+  ].join("\n");
 }
 
 function buildDailyPortfolioRows(records: WalletArchiveRecord[]): DailyPortfolioRow[] {
@@ -2881,20 +2913,6 @@ function clearPersistedResult(address: string, endDate: string) {
   const storage = safeStorage();
   if (!storage) return;
   storage.removeItem(persistedResultKey(address, endDate));
-}
-
-function clearPersistedResults(): number {
-  const storage = safeStorage();
-  if (!storage) return 0;
-  let removed = 0;
-  for (let index = storage.length - 1; index >= 0; index -= 1) {
-    const key = storage.key(index);
-    if (key?.startsWith(RESULT_CACHE_PREFIX)) {
-      storage.removeItem(key);
-      removed += 1;
-    }
-  }
-  return removed;
 }
 
 function readPersistedScanHistory(): ScanHistoryRecord[] {
