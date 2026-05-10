@@ -745,6 +745,8 @@ function authPayloadToSession(payload) {
 
 async function enrichSessionWithProfile(env, session) {
   const profile = await getProfileByUserId(env, session.user.id);
+  if (!profile) throw userError("账号资料不存在，请重新注册或联系管理员。", 403);
+  if (profile.status !== "active") throw userError("账号已被禁用。", 403);
   return {
     ...session,
     user: {

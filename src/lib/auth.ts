@@ -116,7 +116,7 @@ export async function validateAuthSession(session: AuthSession): Promise<boolean
   });
   if (!response.ok) return false;
   const payload = (await response.json().catch(() => ({}))) as { user?: AuthUser | null };
-  return Boolean(payload.user?.id);
+  return Boolean(payload.user?.id && payload.user.status !== "disabled");
 }
 
 export async function refreshAuthProfile(session: AuthSession): Promise<AuthSession | null> {
@@ -127,6 +127,7 @@ export async function refreshAuthProfile(session: AuthSession): Promise<AuthSess
   if (!response.ok) return null;
   const payload = (await response.json().catch(() => ({}))) as { user?: unknown };
   if (!isAuthUser(payload.user)) return null;
+  if (payload.user.status === "disabled") return null;
   return { ...session, user: payload.user };
 }
 

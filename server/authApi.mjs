@@ -30,7 +30,7 @@ export async function handleAuthApi(request, response, config, env = process.env
       200,
       {
         configured: isSupabaseConfigured(env),
-        user: auth?.user
+        user: auth?.user && auth.profile
           ? {
               id: auth.user.id,
               email: auth.user.email || "",

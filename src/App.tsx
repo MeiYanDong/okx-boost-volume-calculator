@@ -1556,8 +1556,8 @@ function WalletRow({
   onForceScan: () => void;
   onRename: () => void;
 }) {
-  const todayRow = record.result?.dailyRows.find((row) => row.date === endDate);
-  const targetDelta = record.result && targetTotal !== null ? record.result.totalBoostVolume - targetTotal : null;
+  const metrics = record.result ? resultWindowMetrics(record.result, endDate) : null;
+  const targetDelta = metrics && targetTotal !== null ? metrics.totalBoostVolume - targetTotal : null;
   const displayName = walletDisplayName(record, index);
   const canOpenDetail = Boolean(record.result);
 
@@ -1585,9 +1585,9 @@ function WalletRow({
       <td>
         <StatusCell record={record} />
       </td>
-      <td>{record.result ? formatUsd(record.result.totalBoostVolume) : "--"}</td>
-      <td>{record.result ? formatUsd(record.result.averageBoostVolume) : "--"}</td>
-      <td>{todayRow ? formatUsd(todayRow.boostVolume) : "--"}</td>
+      <td>{metrics ? formatUsd(metrics.totalBoostVolume) : "--"}</td>
+      <td>{metrics ? formatUsd(metrics.averageBoostVolume) : "--"}</td>
+      <td>{metrics ? formatUsd(metrics.todayBoostVolume) : "--"}</td>
       <td>
         {targetDelta === null ? (
           "--"
@@ -2054,9 +2054,9 @@ function ReportsPage({
   targetTotal: number | null;
   onSelectWallet: (address: string) => void;
 }) {
-  const dailyRows = buildDailyPortfolioRows(records);
+  const dailyRows = buildDailyPortfolioRows(records, endDate);
   const rankingRows = buildWalletRankingRows(records, endDate, targetTotal);
-  const sourceRows = buildSourceBreakdownRows(records);
+  const sourceRows = buildSourceBreakdownRows(records, endDate);
   const targetTotalForAllWallets = targetTotal ? targetTotal * records.length : 0;
   const nextAction = targetTotal
     ? portfolio.targetGap > 0
@@ -3110,11 +3110,12 @@ function buildPortfolioSummary(
     if (record.state === "error") failedWallets += 1;
     if (!record.result && record.state !== "running" && record.state !== "error") pendingWallets += 1;
     if (!record.result) continue;
+    const metrics = resultWindowMetrics(record.result, endDate);
     archivedWallets += 1;
-    averageBoostVolume += record.result.averageBoostVolume;
-    totalBoostVolume += record.result.totalBoostVolume;
-    todayBoostVolume += record.result.dailyRows.find((row) => row.date === endDate)?.boostVolume || 0;
-    countedTxCount += record.result.swaps.filter((swap) => swap.status === "counted").length;
+    averageBoostVolume += metrics.averageBoostVolume;
+    totalBoostVolume += metrics.totalBoostVolume;
+    todayBoostVolume += metrics.todayBoostVolume;
+    countedTxCount += metrics.countedTxCount;
   }
 
   const targetTotal = targetTotalPerWallet === null ? 0 : targetTotalPerWallet * records.length;
@@ -3132,6 +3133,24 @@ function buildPortfolioSummary(
     countedTxCount,
     targetGap,
     targetRate,
+  };
+}
+
+function resultWindowMetrics(result: CalculationResult, endDate: string) {
+  const { days } = buildUtcWindow(endDate);
+  const daySet = new Set(days);
+  const dailyRows = result.dailyRows.filter((row) => daySet.has(row.date));
+  const totalBoostVolume = dailyRows.reduce((sum, row) => sum + row.boostVolume, 0);
+  const totalTradeUsd = dailyRows.reduce((sum, row) => sum + row.tradeUsd, 0);
+  const todayBoostVolume = result.dailyRows.find((row) => row.date === endDate)?.boostVolume || 0;
+  const countedTxCount = result.swaps.filter((swap) => swap.status === "counted" && daySet.has(swap.utcDate)).length;
+
+  return {
+    totalBoostVolume,
+    totalTradeUsd,
+    averageBoostVolume: totalBoostVolume / 10,
+    todayBoostVolume,
+    countedTxCount,
   };
 }
 
@@ -3275,11 +3294,16 @@ function buildFeishuForecastMessage(row: SnapshotForecastRow, targetTotalPerWall
   ].join("\n");
 }
 
-function buildDailyPortfolioRows(records: WalletArchiveRecord[]): DailyPortfolioRow[] {
-  const rows = new Map<string, DailyPortfolioRow>();
+function buildDailyPortfolioRows(records: WalletArchiveRecord[], endDate: string): DailyPortfolioRow[] {
+  const { days } = buildUtcWindow(endDate);
+  const daySet = new Set(days);
+  const rows = new Map<string, DailyPortfolioRow>(
+    days.map((date) => [date, { date, boostVolume: 0, tradeUsd: 0, txCount: 0 }]),
+  );
   for (const record of records) {
     if (!record.result) continue;
     for (const row of record.result.dailyRows) {
+      if (!daySet.has(row.date)) continue;
       const existing = rows.get(row.date) || { date: row.date, boostVolume: 0, tradeUsd: 0, txCount: 0 };
       existing.boostVolume += row.boostVolume;
       existing.tradeUsd += row.tradeUsd;
@@ -3298,16 +3322,15 @@ function buildWalletRankingRows(
   return records
     .map((record, index) => {
       if (!record.result) return null;
-      const todayBoostVolume = record.result.dailyRows.find((row) => row.date === endDate)?.boostVolume || 0;
-      const countedTxCount = record.result.swaps.filter((swap) => swap.status === "counted").length;
+      const metrics = resultWindowMetrics(record.result, endDate);
       return {
         address: record.address,
         name: walletDisplayName(record, index),
-        totalBoostVolume: record.result.totalBoostVolume,
-        averageBoostVolume: record.result.averageBoostVolume,
-        todayBoostVolume,
-        countedTxCount,
-        targetDelta: targetTotal === null ? null : record.result.totalBoostVolume - targetTotal,
+        totalBoostVolume: metrics.totalBoostVolume,
+        averageBoostVolume: metrics.averageBoostVolume,
+        todayBoostVolume: metrics.todayBoostVolume,
+        countedTxCount: metrics.countedTxCount,
+        targetDelta: targetTotal === null ? null : metrics.totalBoostVolume - targetTotal,
       };
     })
     .filter((row): row is WalletRankingRow => Boolean(row))
@@ -3319,10 +3342,11 @@ function buildWalletRankingRows(
     });
 }
 
-function buildSourceBreakdownRows(records: WalletArchiveRecord[]): SourceBreakdownRow[] {
+function buildSourceBreakdownRows(records: WalletArchiveRecord[], endDate: string): SourceBreakdownRow[] {
   const rows = new Map<string, SourceBreakdownRow>();
   for (const record of records) {
     if (!record.result) continue;
+    const metrics = resultWindowMetrics(record.result, endDate);
     const source = record.result.txDiscoverySource || "archive";
     const label = discoverySourceLabel(source);
     const existing = rows.get(label) || {
@@ -3332,7 +3356,7 @@ function buildSourceBreakdownRows(records: WalletArchiveRecord[]): SourceBreakdo
       boostVolume: 0,
     };
     existing.walletCount += 1;
-    existing.boostVolume += record.result.totalBoostVolume;
+    existing.boostVolume += metrics.totalBoostVolume;
     rows.set(label, existing);
   }
   return [...rows.values()].sort((a, b) => b.boostVolume - a.boostVolume);

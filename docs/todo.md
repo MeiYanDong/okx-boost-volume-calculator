@@ -61,6 +61,8 @@
   子 todo：[S27 账号归档隔离加固](./todos/2026-05-10-account-archive-isolation.md)
 - [x] S28 系统审查与权限边界加固
   子 todo：[S28 系统审查与权限边界加固](./todos/2026-05-10-system-audit-hardening.md)
+- [x] S29 会话与快照窗口审查
+  子 todo：[S29 会话与快照窗口审查](./todos/2026-05-10-session-window-audit.md)
 
 ## 维护规则
 
