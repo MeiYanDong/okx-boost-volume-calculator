@@ -39,6 +39,8 @@
   子 todo：[S16 服务端归档与每日自动刷新](./todos/2026-05-09-server-cron-refresh.md)
 - [x] S17 归档数据空间隔离
   子 todo：[S17 归档数据空间隔离](./todos/2026-05-10-archive-workspaces.md)
+- [x] S18 Supabase 邀请制基础设施
+  子 todo：[S18 Supabase 邀请制基础设施](./todos/2026-05-10-supabase-invite-foundation.md)
 
 ## 维护规则
 
