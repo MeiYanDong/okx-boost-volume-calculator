@@ -51,7 +51,7 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
       await saveCronWorkspaceArchive(env, workspace, result.updatedArchive);
     }
 
-    const notificationTarget = await resolveNotificationTarget(env, workspace, config);
+    const notificationTarget = await resolveNotificationTarget(env, workspace);
     const shouldNotify = shouldNotifyForTarget(result, notificationTarget);
     let notified = false;
     let notificationProvider = "";
@@ -145,7 +145,7 @@ async function saveCronWorkspaceArchive(env, workspace, archive) {
   await setServerArchive(archive, env, workspace.workspaceId);
 }
 
-async function resolveNotificationTarget(env, workspace, config) {
+async function resolveNotificationTarget(env, workspace) {
   if (workspace.provider === "supabase") {
     const target = await getSupabaseWorkspaceNotificationTarget(env, workspace.workspaceId).catch(() => null);
     if (target?.enabled) {
@@ -157,12 +157,7 @@ async function resolveNotificationTarget(env, workspace, config) {
       };
     }
   }
-  return {
-    provider: "global",
-    webhookUrl: config.feishuWebhookUrl,
-    webhookSecret: config.feishuWebhookSecret,
-    notifyFutureDays: 3,
-  };
+  return null;
 }
 
 function shouldNotifyForTarget(result, target) {

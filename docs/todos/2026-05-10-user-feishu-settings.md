@@ -11,9 +11,9 @@
 
 - [x] `/api/auth` 接入 `get-notification-settings`
 - [x] `/api/auth` 接入 `update-notification-settings`
-- [x] `/api/feishu` 优先使用登录用户配置
-- [x] `/api/feishu` 保留全局 Webhook 兜底
-- [x] Cron 对 Supabase 工作区优先使用所属用户配置
+- [x] `/api/feishu` 使用登录用户配置
+- [x] `/api/feishu` 不再保留全局 Webhook 兜底
+- [x] Cron 对 Supabase 工作区使用所属用户配置
 - [x] Cron 按用户配置的未来预测天数判断是否提醒
 
 ## 3. 前端

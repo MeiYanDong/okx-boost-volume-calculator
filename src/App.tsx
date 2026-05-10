@@ -2295,7 +2295,9 @@ function SettingsPage({
       const response = await fetch("/api/feishu", {
         method: "POST",
         headers: authHeaders(authSession, { "content-type": "application/json" }),
-        body: JSON.stringify({ text: `OKX Boost 测试提醒\n账号：${authSession.user.email}\n时间：${new Date().toLocaleString()}` }),
+        body: JSON.stringify({
+          text: `OKX Boost 飞书测试\n用途：验证当前账号保存的机器人配置可用。\n说明：测试消息不包含钱包地址、交易哈希或交易量。\n时间：${new Date().toLocaleString()}`,
+        }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);

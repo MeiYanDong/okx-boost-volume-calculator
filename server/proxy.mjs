@@ -21,8 +21,6 @@ export function createProxyConfig(env) {
       deriveAnkrMultichainUrl(envValue(env, "BSC_RPC_URL", "VITE_BSC_RPC_URL")),
     etherscanApiKey: envValue(env, "ETHERSCAN_API_KEY", "VITE_ETHERSCAN_API_KEY"),
     etherscanApiUrl: "https://api.etherscan.io/v2/api",
-    feishuWebhookUrl: envValue(env, "FEISHU_WEBHOOK_URL"),
-    feishuWebhookSecret: envValue(env, "FEISHU_WEBHOOK_SECRET"),
   };
 }
 
@@ -117,14 +115,7 @@ export async function handleFeishuNotify(request, response, config, env = proces
     return;
   }
 
-  validateAccess(request, config);
-  if (!config.feishuWebhookUrl) {
-    sendJson(response, 400, { error: "Feishu webhook is not configured" }, { "cache-control": "no-store" });
-    return;
-  }
-
-  await sendFeishuText(text, config);
-  sendJson(response, 200, { ok: true, provider: "global" }, { "cache-control": "no-store" });
+  sendJson(response, 401, { error: "请先登录账号并配置个人飞书 Webhook。" }, { "cache-control": "no-store" });
 }
 
 export async function sendFeishuText(text, config) {

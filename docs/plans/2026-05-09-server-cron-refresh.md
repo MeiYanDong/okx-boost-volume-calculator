@@ -24,7 +24,7 @@
 
 ## 当前状态
 
-已完成。生产部署已完成，稳定 alias 保持为 `https://okx-boost-volume-calculator.vercel.app`；生产环境已确认 Upstash Redis、`CRON_SECRET`、飞书 Webhook、Ankr、BSC RPC 和访问密码均存在；未授权访问 `/api/archive` 和 `/api/cron/daily-refresh` 均返回 401。
+已完成。生产部署已完成，稳定 alias 保持为 `https://okx-boost-volume-calculator.vercel.app`；生产环境已确认 Upstash Redis、`CRON_SECRET`、Ankr、BSC RPC 和访问密码均存在；飞书 Webhook 后续已在 S24/S25 改为用户个人配置；未授权访问 `/api/archive` 和 `/api/cron/daily-refresh` 均返回 401。
 
 ## 验收标准
 

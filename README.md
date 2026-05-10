@@ -134,7 +134,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 3. 配置 Vercel Upstash Redis，用来保存钱包列表、扫描结果、加成规则和自动刷新状态。
 4. 如果我要多用户账号隔离，请配置 Supabase：SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、SUPABASE_SECRET_KEY，并实际验证 /api/auth?action=me 返回 configured: true。
 5. 配置 CRON_SECRET，用来保护每日自动刷新接口。
-6. 如果我要飞书提醒，优先让我登录后在偏好设置里配置账号级 Webhook；如果需要旧版全局兜底，再在 Vercel 环境变量里配置 FEISHU_WEBHOOK_URL 和 FEISHU_WEBHOOK_SECRET。
+6. 如果我要飞书提醒，请让我登录后在偏好设置里配置个人 Webhook；不要使用全局飞书 Webhook。
 7. 部署生产版本。
 8. 验证页面能打开。
 9. 验证不带访问密码时 API 会拒绝。
@@ -201,7 +201,9 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 
 自动提醒只在“有风险”或“自动刷新失败”时发送，不发送无意义的安全日报。
 
-登录用户可以在“偏好设置 → 飞书通知”里保存自己的飞书机器人 Webhook 和签名密钥。手动风险提醒和每日自动提醒都会优先使用这个账号级配置；如果账号没有配置，私人部署仍可以用 Vercel 环境变量里的全局 Webhook 兜底。
+登录用户可以在“偏好设置 → 飞书通知”里保存自己的飞书机器人 Webhook 和签名密钥。手动风险提醒和每日自动提醒只使用这个账号级配置；如果账号没有配置，系统不会代发到其他人的机器人。
+
+“发送测试”只用于验证机器人连通性，不包含钱包地址、交易哈希或交易量。真实钱包数据只会在你手动发送快照风险提醒，或每日自动刷新发现风险时发送。
 
 ## 多个用户怎么区分数据
 
