@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { getSupabaseUserFromRequest } from "./supabaseStore.mjs";
 
 const maxBodyBytes = 1_000_000;
 const upstreamTimeoutMs = 25_000;
@@ -31,26 +32,26 @@ export function warnLegacyEnv(env, primary, legacy) {
   }
 }
 
-export async function handleRpcProxy(request, response, config) {
+export async function handleRpcProxy(request, response, config, env = process.env) {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Use POST" });
     return;
   }
 
-  validateAccess(request, config);
+  await validateServiceAccess(request, config, env);
   const body = await readJsonBody(request);
   validateRpcBody(body);
   const payload = await postJson(config.bscRpcUrl, body);
   sendJson(response, 200, payload, { "cache-control": "no-store" });
 }
 
-export async function handleAnkrProxy(request, response, config) {
+export async function handleAnkrProxy(request, response, config, env = process.env) {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Use POST" });
     return;
   }
 
-  validateAccess(request, config);
+  await validateServiceAccess(request, config, env);
   if (!config.ankrMultichainRpcUrl) {
     sendJson(response, 200, jsonRpcError("Ankr Advanced API is not configured"), { "cache-control": "no-store" });
     return;
@@ -62,13 +63,13 @@ export async function handleAnkrProxy(request, response, config) {
   sendJson(response, 200, payload, { "cache-control": "no-store" });
 }
 
-export async function handleExplorerProxy(request, response, config, url = requestUrl(request)) {
+export async function handleExplorerProxy(request, response, config, url = requestUrl(request), env = process.env) {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Use GET" });
     return;
   }
 
-  validateAccess(request, config);
+  await validateServiceAccess(request, config, env);
   if (!config.etherscanApiKey) {
     sendJson(response, 200, {
       status: "0",
@@ -171,13 +172,30 @@ function envValue(env, primary, legacy) {
 export function validateAccess(request, config) {
   if (!config.accessPassword) return;
 
-  const direct = headerValue(request.headers, "x-okx-boost-access");
-  const authorization = headerValue(request.headers, "authorization").replace(/^Bearer\s+/i, "");
-  if (direct === config.accessPassword || authorization === config.accessPassword) return;
+  if (hasDirectAccess(request, config)) return;
 
   const error = new Error("访问密码错误或缺失。");
   error.statusCode = 401;
   throw error;
+}
+
+export async function validateServiceAccess(request, config, env = process.env) {
+  if (!config.accessPassword) return;
+  if (hasDirectAccess(request, config)) return;
+
+  const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
+  if (auth?.profile?.status === "active") return;
+
+  const error = new Error("请登录有效账号或填写私有访问码。");
+  error.statusCode = 401;
+  throw error;
+}
+
+function hasDirectAccess(request, config) {
+  const direct = headerValue(request.headers, "x-okx-boost-access");
+  const authorization = headerValue(request.headers, "authorization").replace(/^Bearer\s+/i, "");
+  if (direct === config.accessPassword || authorization === config.accessPassword) return true;
+  return false;
 }
 
 function headerValue(headers, name) {

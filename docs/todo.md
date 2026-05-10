@@ -47,6 +47,8 @@
   子 todo：[S20 管理员邀请码管理页](./todos/2026-05-10-invite-admin-page.md)
 - [x] S21 账号级管理员权限
   子 todo：[S21 账号级管理员权限](./todos/2026-05-10-account-admin-permissions.md)
+- [x] S22 账号额度与扫描访问闭环加固
+  子 todo：[S22 账号额度与扫描访问闭环加固](./todos/2026-05-10-quota-auth-audit.md)
 
 ## 维护规则
 

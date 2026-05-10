@@ -20,7 +20,7 @@ export async function handleAuthApi(request, response, config, env = process.env
       sendJson(response, 405, { error: "Use POST or GET?action=me" }, { "cache-control": "no-store" });
       return;
     }
-    const auth = await getSupabaseUserFromRequest(request, env);
+    const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
     sendJson(
       response,
       200,
@@ -99,14 +99,14 @@ export async function handleAuthApi(request, response, config, env = process.env
 }
 
 async function validateAdminAccess(request, config, env) {
-  const adminAuth = await isAdminAuth(request, env);
-  if (adminAuth) return { mode: "admin-session", userId: adminAuth.user.id, bootstrap: false };
-
   const cronSecret = String(env.CRON_SECRET || "").trim();
   const authorization = headerValue(request.headers, "authorization");
   if (cronSecret && authorization === `Bearer ${cronSecret}`) {
     return { mode: "cron-secret", userId: "", bootstrap: false };
   }
+
+  const adminAuth = await isAdminAuth(request, env);
+  if (adminAuth) return { mode: "admin-session", userId: adminAuth.user.id, bootstrap: false };
 
   const hasAdmin = await hasActiveAdminProfile(env);
   try {

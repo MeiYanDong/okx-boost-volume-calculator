@@ -54,18 +54,22 @@ export async function createInvite(input, env = process.env) {
   ensureSupabaseConfigured(env);
   const code = normalizeInviteCode(input?.code) || generateInviteCode();
   const email = normalizeEmail(input?.email);
+  const role = input?.role === "admin" ? "admin" : "user";
   const expiresInDays = clampInteger(input?.expiresInDays, 1, 365, 14);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresInDays * 24 * 60 * 60 * 1000).toISOString();
+  const defaultMaxWallets = role === "admin" ? 200 : 20;
+  const defaultRefreshLimit = role === "admin" ? 1000 : 50;
+  const defaultRescanLimit = role === "admin" ? 100 : 10;
 
   const [invite] = await restInsert(env, "invites", [
     {
       code_hash: hashInviteCode(code),
       email: email || null,
-      role: input?.role === "admin" ? "admin" : "user",
-      max_wallets: clampInteger(input?.maxWallets, 1, 200, 20),
-      daily_refresh_limit: clampInteger(input?.dailyRefreshLimit, 0, 1000, 50),
-      daily_rescan_limit: clampInteger(input?.dailyRescanLimit, 0, 1000, 10),
+      role,
+      max_wallets: clampInteger(input?.maxWallets, 1, 500, defaultMaxWallets),
+      daily_refresh_limit: clampInteger(input?.dailyRefreshLimit, 0, 5000, defaultRefreshLimit),
+      daily_rescan_limit: clampInteger(input?.dailyRescanLimit, 0, 1000, defaultRescanLimit),
       expires_at: expiresAt,
       created_by: isUuid(input?.createdBy) ? input.createdBy : null,
     },
@@ -113,7 +117,7 @@ export async function hasActiveAdminProfile(env = process.env) {
 }
 
 export async function isAdminAuth(request, env = process.env) {
-  const auth = await getSupabaseUserFromRequest(request, env);
+  const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
   const profile = auth?.profile || null;
   return Boolean(profile?.role === "admin" && profile?.status === "active") ? auth : null;
 }
@@ -172,6 +176,7 @@ export async function redeemInvite(input, env = process.env) {
 
 export async function getUserArchive(env, user) {
   ensureSupabaseConfigured(env);
+  await getActiveProfileForUser(env, user.id);
   const workspace = await getOrCreateDefaultWorkspace(env, user.id);
   const archive = await buildArchiveFromWorkspace(env, workspace);
   return { workspaceId: workspace.id, archive };
@@ -179,14 +184,23 @@ export async function getUserArchive(env, user) {
 
 export async function saveUserArchive(env, user, archive) {
   ensureSupabaseConfigured(env);
+  const profile = await getActiveProfileForUser(env, user.id);
+  assertWalletQuota(archiveEntries(archive), profile);
   const workspace = await getOrCreateDefaultWorkspace(env, user.id);
   return saveWorkspaceArchive(env, workspace.id, archive);
 }
 
 export async function listSupabaseWorkspaceIds(env = process.env) {
   if (!isSupabaseConfigured(env)) return [];
-  const rows = await restSelect(env, "workspaces", {
+  const profiles = await restSelect(env, "app_profiles", {
+    status: "eq.active",
     select: "id",
+  });
+  const ownerIds = profiles.map((profile) => String(profile.id || "")).filter(Boolean);
+  if (!ownerIds.length) return [];
+  const rows = await restSelect(env, "workspaces", {
+    owner_id: `in.(${ownerIds.join(",")})`,
+    select: "id,owner_id",
     order: "created_at.asc",
   });
   return rows.map((row) => String(row.id || "")).filter(Boolean);
@@ -209,6 +223,8 @@ async function saveWorkspaceArchive(env, workspaceId, archive) {
   const workspace = await getWorkspaceById(env, workspaceId);
   if (!workspace) throw userError("Supabase workspace not found", 404);
   const entries = archiveEntries(archive);
+  const profile = await getActiveProfileForUser(env, workspace.owner_id);
+  assertWalletQuota(entries, profile);
   const walletRows = await syncWorkspaceWallets(env, workspace.id, entries);
   const walletIdByAddress = new Map(walletRows.map((row) => [normalizeAddress(row.address), row.id]));
   await saveWorkspaceSettings(env, workspace.id, archive);
@@ -405,6 +421,20 @@ async function getProfileByUserId(env, userId) {
     limit: "1",
   });
   return profile || null;
+}
+
+async function getActiveProfileForUser(env, userId) {
+  const profile = await getProfileByUserId(env, userId);
+  if (!profile) throw userError("账号资料不存在，请重新注册或联系管理员。", 403);
+  if (profile.status !== "active") throw userError("账号已被禁用。", 403);
+  return profile;
+}
+
+function assertWalletQuota(entries, profile) {
+  const maxWallets = Number(profile?.max_wallets || 0);
+  if (maxWallets > 0 && entries.length > maxWallets) {
+    throw userError(`钱包数量超过账号额度：当前 ${entries.length} 个，额度 ${maxWallets} 个。`, 403);
+  }
 }
 
 async function getAuthUser(token, env) {

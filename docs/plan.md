@@ -4,11 +4,11 @@
 
 ## 当前阶段
 
-S21：账号级管理员权限已完成。
+S22：账号额度与扫描访问闭环加固已完成。
 
-S21 将邀请码管理权限从全局私有访问码升级为 Supabase 账号角色：登录的 `admin` 账号可以管理邀请码；私有访问码只保留为首个管理员初始化入口。
+S22 修复系统审查中发现的明显断点：钱包额度从展示字段升级为服务端强制约束；登录用户可直接使用受保护扫描接口；长开页面会自动刷新 Supabase 登录态；超出钱包额度时前端停止自动同步并给出明确反馈。
 
-子 plan：[S21 账号级管理员权限](./plans/2026-05-10-account-admin-permissions.md)
+子 plan：[S22 账号额度与扫描访问闭环加固](./plans/2026-05-10-quota-auth-audit.md)
 
 ## 阶段索引
 
@@ -36,6 +36,7 @@ S21 将邀请码管理权限从全局私有访问码升级为 Supabase 账号角
 | S19 邀请制登录与 Supabase 云端归档 | 已完成 | [子 plan](./plans/2026-05-10-supabase-auth-archive.md) | 登录用户按 Supabase 账号保存归档，Cron 同时支持 Supabase 与旧 Upstash |
 | S20 管理员邀请码管理页 | 已完成 | [子 plan](./plans/2026-05-10-invite-admin-page.md) | 在偏好设置中创建、查看和撤销邀请码 |
 | S21 账号级管理员权限 | 已完成 | [子 plan](./plans/2026-05-10-account-admin-permissions.md) | 用 Supabase 账号角色管理邀请，私有访问码只做首个管理员初始化 |
+| S22 账号额度与扫描访问闭环加固 | 已完成 | [子 plan](./plans/2026-05-10-quota-auth-audit.md) | 强制钱包额度，允许登录用户扫描，减少过期登录态和超额同步失败 |
 
 ## 执行原则
 

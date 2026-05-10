@@ -772,7 +772,7 @@ textarea:focus-visible {
 
 .wallet-command-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -820,7 +820,7 @@ textarea:focus-visible {
 }
 
 .wallet-management-actions button:disabled {
-  cursor: progress;
+  cursor: not-allowed;
   opacity: 0.58;
 }
 
@@ -924,6 +924,17 @@ textarea:focus-visible {
   color: var(--faint);
   font-size: 12px;
   font-weight: 720;
+  line-height: 1.45;
+}
+
+.wallet-quota-warning {
+  border: 1px solid rgba(255, 102, 85, 0.3);
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 820;
   line-height: 1.45;
 }
 

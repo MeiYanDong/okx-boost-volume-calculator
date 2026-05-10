@@ -45,17 +45,17 @@ const server = createServer(async (request, response) => {
     const url = requestUrl(request);
 
     if (url.pathname === "/api/rpc") {
-      await handleRpcProxy(request, response, config);
+      await handleRpcProxy(request, response, config, env);
       return;
     }
 
     if (url.pathname === "/api/ankr") {
-      await handleAnkrProxy(request, response, config);
+      await handleAnkrProxy(request, response, config, env);
       return;
     }
 
     if (url.pathname === "/api/explorer") {
-      await handleExplorerProxy(request, response, config, url);
+      await handleExplorerProxy(request, response, config, url, env);
       return;
     }
 

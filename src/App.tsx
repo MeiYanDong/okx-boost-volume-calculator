@@ -287,6 +287,8 @@ export default function App() {
   const selectedRecord = appliedRecords.find((record) => record.address === selectedWallet) || null;
   const viewMeta = viewMetaFor(currentView, targetTotal);
   const canUseServerArchive = Boolean(authSession || accessPassword.trim());
+  const authMaxWallets = Number(authSession?.user.maxWallets || 0);
+  const authWalletQuotaExceeded = Boolean(authSession && authMaxWallets > 0 && parsedWallets.entries.length > authMaxWallets);
   const primaryAction = useMemo(
     () => buildPrimaryAction(appliedRecords, portfolio, anyRunning),
     [appliedRecords, portfolio, anyRunning],
@@ -311,6 +313,34 @@ export default function App() {
   useEffect(() => {
     writeAuthSession(authSession);
   }, [authSession]);
+
+  useEffect(() => {
+    if (!authSession) return;
+    let cancelled = false;
+
+    async function refreshIfNeeded() {
+      if (!authSession || !shouldRefreshSession(authSession)) return;
+      try {
+        const nextSession = await refreshAuthSession(authSession.refreshToken);
+        if (!cancelled) {
+          setAuthSession(nextSession);
+          setAuthState({ status: "ready", message: "已刷新 Supabase 登录态" });
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthSession(null);
+          setAuthState({ status: "error", message: "登录已过期，请重新登录" });
+        }
+      }
+    }
+
+    void refreshIfNeeded();
+    const interval = window.setInterval(() => void refreshIfNeeded(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [authSession?.accessToken, authSession?.refreshToken, authSession?.expiresAt]);
 
   useEffect(() => {
     const session = readAuthSession();
@@ -399,6 +429,13 @@ export default function App() {
       setArchiveSyncState({ status: "idle", message: "添加钱包或完成扫描后同步服务端归档" });
       return;
     }
+    if (authWalletQuotaExceeded) {
+      setArchiveSyncState({
+        status: "error",
+        message: `钱包数量超过账号额度：当前 ${parsedWallets.entries.length} 个，额度 ${authMaxWallets} 个。`,
+      });
+      return;
+    }
     const timer = window.setTimeout(() => {
       setArchiveSyncState({ status: "saving", message: "正在同步服务端归档..." });
       void syncServerArchive({
@@ -420,7 +457,7 @@ export default function App() {
       });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, dataSpace, records, scanHistory, accessPassword, authSession, canUseServerArchive]);
+  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, dataSpace, records, scanHistory, accessPassword, authSession, canUseServerArchive, authWalletQuotaExceeded, authMaxWallets, parsedWallets.entries.length]);
 
   useEffect(() => {
     if (selectedWallet && !parsedWallets.addresses.includes(selectedWallet)) {
@@ -1214,6 +1251,9 @@ function WalletManagementPage({
   const archivedPercent = validCount > 0 ? Math.round((archivedWallets / validCount) * 100) : 0;
   const accessCodeState = authSession ? "云端账号" : accessPassword ? "已填写" : "未填写";
   const archiveScopeLabel = authSession ? "Supabase" : dataSpace || DEFAULT_DATA_SPACE;
+  const maxWallets = Number(authSession?.user.maxWallets || 0);
+  const walletQuotaExceeded = Boolean(authSession && maxWallets > 0 && validCount > maxWallets);
+  const walletQuotaLabel = authSession ? `${validCount}/${maxWallets || "不限"}` : "--";
 
   return (
     <section className="work-page wallet-management-page">
@@ -1228,13 +1268,14 @@ function WalletManagementPage({
           <MetricLine label="待扫描" value={String(pendingCount)} />
           <MetricLine label="失败" value={String(failedCount)} />
           <MetricLine label="归档" value={archiveScopeLabel} />
+          <MetricLine label="钱包额度" value={walletQuotaLabel} />
         </div>
         <div className="wallet-management-actions">
-          <button type="button" onClick={onScanAll} disabled={anyRunning || validCount === 0}>
+          <button type="button" onClick={onScanAll} disabled={anyRunning || validCount === 0 || walletQuotaExceeded}>
             <RefreshCcw size={16} />
             刷新新增交易
           </button>
-          <button type="button" onClick={onForceScanAll} disabled={anyRunning || validCount === 0} className="danger-action">
+          <button type="button" onClick={onForceScanAll} disabled={anyRunning || validCount === 0 || walletQuotaExceeded} className="danger-action">
             <RefreshCcw size={16} />
             强制重扫全部
           </button>
@@ -1264,13 +1305,19 @@ function WalletManagementPage({
             <small>支持一行一个地址，也支持「名称 地址」。</small>
           </label>
 
+          {walletQuotaExceeded && (
+            <div className="wallet-quota-warning">
+              当前账号最多保存 {maxWallets} 个钱包，请减少 {validCount - maxWallets} 个地址后再同步或扫描。
+            </div>
+          )}
+
           {authSession ? (
             <div className="access-code-panel">
               <span>
                 <ShieldCheck size={16} /> 云端账号
               </span>
               <strong>{authSession.user.email}</strong>
-              <small>已登录时，钱包列表和扫描归档保存到 Supabase 账号。</small>
+              <small>已登录时，钱包列表和扫描归档保存到 Supabase 账号。额度 {walletQuotaLabel}。</small>
             </div>
           ) : (
             <>
@@ -2200,6 +2247,15 @@ function SettingsPage({
     }
   }
 
+  function updateInviteRole(role: "admin" | "user") {
+    setInviteRole(role);
+    setInviteMaxWallets((current) => {
+      if (role === "admin" && (!current || current === "20")) return "200";
+      if (role === "user" && current === "200") return "20";
+      return current;
+    });
+  }
+
   return (
     <section className="work-page">
       <PageHeader
@@ -2280,7 +2336,7 @@ function SettingsPage({
             </label>
             <label>
               <span>账号角色</span>
-              <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as "admin" | "user")}>
+              <select value={inviteRole} onChange={(event) => updateInviteRole(event.target.value as "admin" | "user")}>
                 <option value="user">普通用户</option>
                 <option value="admin">管理员</option>
               </select>
@@ -2290,7 +2346,7 @@ function SettingsPage({
               <input
                 type="number"
                 min="1"
-                max="200"
+                max="500"
                 value={inviteMaxWallets}
                 onChange={(event) => setInviteMaxWallets(event.target.value)}
               />

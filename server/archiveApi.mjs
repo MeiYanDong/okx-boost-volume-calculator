@@ -8,7 +8,7 @@ const maxRecords = 200;
 
 export async function handleArchiveApi(request, response, config, env = process.env) {
   const url = requestUrl(request);
-  const auth = await getSupabaseUserFromRequest(request, env);
+  const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
 
   if (request.method === "GET") {
     if (auth) {
