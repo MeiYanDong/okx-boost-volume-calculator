@@ -629,6 +629,8 @@ textarea:focus-visible {
   border-radius: 8px;
   background: rgba(21, 24, 18, 0.66);
   padding: 11px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .wallet-management-actions {
@@ -783,6 +785,49 @@ textarea:focus-visible {
   border-radius: 8px;
   background: var(--lime-soft);
   padding: 14px;
+}
+
+.archive-sync-status {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 12px;
+}
+
+.archive-sync-status span,
+.archive-sync-status small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.archive-sync-status span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.archive-sync-status small {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.archive-sync-status.synced {
+  border-color: rgba(64, 220, 117, 0.26);
+  background: rgba(64, 220, 117, 0.08);
+}
+
+.archive-sync-status.error {
+  border-color: rgba(255, 102, 85, 0.28);
+  background: rgba(255, 102, 85, 0.08);
+}
+
+.archive-sync-status.loading,
+.archive-sync-status.saving {
+  border-color: rgba(186, 255, 26, 0.26);
+  background: rgba(186, 255, 26, 0.08);
 }
 
 .wallet-archive-meter strong {

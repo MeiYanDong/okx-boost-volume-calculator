@@ -1,5 +1,5 @@
-import { getServerArchive, isArchiveStoreConfigured, setServerArchive } from "./archiveStore.mjs";
-import { readJsonBody, sendJson, validateAccess } from "./proxy.mjs";
+import { getServerArchive, isArchiveStoreConfigured, normalizeWorkspaceId, setServerArchive } from "./archiveStore.mjs";
+import { readJsonBody, requestUrl, sendJson, validateAccess } from "./proxy.mjs";
 
 const maxWalletsTextLength = 20_000;
 const maxBonusRulesLength = 50_000;
@@ -7,11 +7,13 @@ const maxRecords = 200;
 
 export async function handleArchiveApi(request, response, config, env = process.env) {
   validateAccess(request, config);
+  const url = requestUrl(request);
 
   if (request.method === "GET") {
+    const workspaceId = archiveWorkspaceId(request, url);
     const configured = isArchiveStoreConfigured(env);
-    const archive = configured ? await getServerArchive(env) : null;
-    sendJson(response, 200, { configured, archive }, { "cache-control": "no-store" });
+    const archive = configured ? await getServerArchive(env, workspaceId) : null;
+    sendJson(response, 200, { configured, workspaceId, archive }, { "cache-control": "no-store" });
     return;
   }
 
@@ -21,9 +23,10 @@ export async function handleArchiveApi(request, response, config, env = process.
       return;
     }
     const body = await readJsonBody(request);
+    const workspaceId = archiveWorkspaceId(request, url, body);
     const archive = sanitizeArchive(body);
-    const saved = await setServerArchive(archive, env);
-    sendJson(response, 200, { ok: true, archive: saved }, { "cache-control": "no-store" });
+    const saved = await setServerArchive(archive, env, workspaceId);
+    sendJson(response, 200, { ok: true, workspaceId, archive: saved }, { "cache-control": "no-store" });
     return;
   }
 
@@ -41,6 +44,14 @@ export function sanitizeArchive(input) {
     scanHistory: Array.isArray(source.scanHistory) ? source.scanHistory.slice(0, 200).filter(isObject) : [],
     cron: isObject(source.cron) ? source.cron : {},
   };
+}
+
+function archiveWorkspaceId(request, url, body) {
+  return normalizeWorkspaceId(
+    headerValue(request.headers, "x-okx-boost-workspace") ||
+      url.searchParams.get("workspace") ||
+      body?.workspaceId,
+  );
 }
 
 function sanitizeRecord(record) {
@@ -80,4 +91,11 @@ function isUtcDate(value) {
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function headerValue(headers, name) {
+  if (typeof headers?.get === "function") return headers.get(name) || "";
+  const value = headers?.[name.toLowerCase()] || headers?.[name];
+  if (Array.isArray(value)) return value[0] || "";
+  return String(value || "");
 }

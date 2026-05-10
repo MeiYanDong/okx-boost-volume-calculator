@@ -35,6 +35,8 @@ const SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
 const SERVER_MANAGED_EXPLORER_API_KEY = "__server__";
 const SERVER_MANAGED_ANKR_RPC_URL = "/api/ankr";
 const ACCESS_HEADER = "x-okx-boost-access";
+const WORKSPACE_HEADER = "x-okx-boost-workspace";
+const DEFAULT_DATA_SPACE = "default";
 const UI_STATE_KEY = "okx-boost:ui:v4";
 const RESULT_CACHE_PREFIX = "okx-boost:result:v2";
 const SCAN_HISTORY_KEY = "okx-boost:scan-history:v1";
@@ -62,6 +64,10 @@ type NotifyState = {
   status: "idle" | "sending" | "sent" | "error";
   message: string;
 };
+type ArchiveSyncState = {
+  status: "idle" | "loading" | "saving" | "synced" | "error";
+  message: string;
+};
 type ScopedBonusRules = {
   scoped: Record<string, number>;
   global: Record<string, number>;
@@ -73,6 +79,7 @@ type PersistedUiState = {
   boostOverrides?: string;
   selectedWallet?: string;
   tenDayTarget?: string;
+  dataSpace?: string;
   walletFilter?: WalletFilter;
   currentView?: AppView;
 };
@@ -81,6 +88,8 @@ type PersistedResultRecord = {
   savedAt?: string;
 };
 type ServerArchivePayload = {
+  workspaceId?: string;
+  updatedAt?: string;
   walletsText?: string;
   endDate?: string;
   tenDayTarget?: string;
@@ -192,9 +201,11 @@ export default function App() {
   const [initialUiState] = useState(readPersistedUiState);
   const initialWalletsText = initialUiState.walletsText || initialUiState.address || SAMPLE_WALLET;
   const initialEndDate = initialUiState.endDate || maxSnapshotDate;
+  const hasPersistedWalletState = Boolean(initialUiState.walletsText || initialUiState.address);
   const [walletsText, setWalletsText] = useState(initialWalletsText);
   const [endDate, setEndDate] = useState(initialEndDate);
   const [tenDayTarget, setTenDayTarget] = useState(initialUiState.tenDayTarget || DEFAULT_TEN_DAY_TARGET);
+  const [dataSpace, setDataSpace] = useState(normalizeDataSpace(initialUiState.dataSpace || DEFAULT_DATA_SPACE));
   const [accessPassword, setAccessPassword] = useState(readServerAccessPassword);
   const [boostOverrides, setBoostOverrides] = useState(initialUiState.boostOverrides || "");
   const [selectedWallet, setSelectedWallet] = useState("");
@@ -203,6 +214,7 @@ export default function App() {
     isAppView(initialUiState.currentView) ? initialUiState.currentView : "overview",
   );
   const [notifyState, setNotifyState] = useState<NotifyState>({ status: "idle", message: "" });
+  const [archiveSyncState, setArchiveSyncState] = useState<ArchiveSyncState>({ status: "idle", message: "服务端归档待同步" });
   const [serverArchiveReady, setServerArchiveReady] = useState(false);
   const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
     syncWalletRecords([], parseWalletList(initialWalletsText).entries, initialEndDate),
@@ -255,10 +267,11 @@ export default function App() {
       endDate,
       boostOverrides,
       tenDayTarget,
+      dataSpace,
       walletFilter,
       currentView,
     });
-  }, [walletsText, endDate, boostOverrides, tenDayTarget, walletFilter, currentView]);
+  }, [walletsText, endDate, boostOverrides, tenDayTarget, dataSpace, walletFilter, currentView]);
 
   useEffect(() => {
     writeServerAccessPassword(accessPassword);
@@ -272,20 +285,28 @@ export default function App() {
     let cancelled = false;
     async function loadServerArchive() {
       setServerArchiveReady(false);
+      setArchiveSyncState({ status: "loading", message: "正在读取服务端归档..." });
       try {
         const response = await fetch("/api/archive", {
           method: "GET",
-          headers: archiveAccessHeaders(accessPassword),
+          headers: archiveAccessHeaders(accessPassword, dataSpace),
         });
-        if (!response.ok) return;
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(payload.error || `服务端归档读取失败 HTTP ${response.status}`);
+        }
         const payload = (await response.json().catch(() => ({}))) as { archive?: ServerArchivePayload | null };
         const archive = payload.archive;
-        if (!archive) return;
-        if (!archive.walletsText && !archive.records?.length) return;
+        if (!archive || (!archive.walletsText && !archive.records?.length)) {
+          setArchiveSyncState({ status: "synced", message: `数据空间 ${dataSpace} 暂无服务端归档` });
+          return;
+        }
         if (cancelled) return;
         hydrateServerArchive(archive);
+        setArchiveSyncState({ status: "synced", message: `已恢复数据空间 ${dataSpace}` });
       } catch {
-        // Server archive is optional; local storage remains the fallback.
+        const message = "服务端归档未同步，请检查私有访问码或稍后重试";
+        setArchiveSyncState({ status: "error", message });
       } finally {
         if (!cancelled) setServerArchiveReady(true);
       }
@@ -299,18 +320,26 @@ export default function App() {
   useEffect(() => {
     if (!serverArchiveReady || anyRunning) return;
     const timer = window.setTimeout(() => {
+      setArchiveSyncState({ status: "saving", message: "正在同步服务端归档..." });
       void syncServerArchive({
         walletsText,
         endDate,
         tenDayTarget,
         boostOverrides,
+        dataSpace,
         records,
         scanHistory,
         accessPassword,
+      }).then((result) => {
+        setArchiveSyncState(
+          result.ok
+            ? { status: "synced", message: `已同步到数据空间 ${dataSpace}` }
+            : { status: "error", message: result.error || "服务端归档同步失败" },
+        );
       });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, records, scanHistory, accessPassword]);
+  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, dataSpace, records, scanHistory, accessPassword]);
 
   useEffect(() => {
     if (selectedWallet && !parsedWallets.addresses.includes(selectedWallet)) {
@@ -542,7 +571,11 @@ export default function App() {
 
   function hydrateServerArchive(archive: ServerArchivePayload) {
     const nextEndDate = archive.endDate && isUtcDate(archive.endDate) ? archive.endDate : endDate;
-    const nextWalletsText = archive.walletsText || walletsText;
+    const nextWalletsText = mergeWalletTexts({
+      localText: walletsText,
+      serverText: archive.walletsText || "",
+      preserveLocal: hasPersistedWalletState,
+    });
     const nextRecords = hydrateRecordsFromServerArchive(archive, nextWalletsText, nextEndDate);
 
     setWalletsText(nextWalletsText);
@@ -651,6 +684,8 @@ export default function App() {
           <WalletManagementPage
             walletsText={walletsText}
             accessPassword={accessPassword}
+            dataSpace={dataSpace}
+            archiveSyncState={archiveSyncState}
             records={appliedRecords}
             validCount={parsedWallets.addresses.length}
             invalidCount={parsedWallets.invalid.length}
@@ -659,6 +694,7 @@ export default function App() {
             anyRunning={anyRunning}
             onWalletsTextChange={setWalletsText}
             onAccessPasswordChange={setAccessPassword}
+            onDataSpaceChange={(value) => setDataSpace(normalizeDataSpace(value))}
             onScanAll={() => scanAll(false)}
             onForceScanAll={confirmForceScanAll}
             onRenameWallet={renameWallet}
@@ -921,6 +957,8 @@ function Toolbar({
 function WalletManagementPage({
   walletsText,
   accessPassword,
+  dataSpace,
+  archiveSyncState,
   records,
   validCount,
   invalidCount,
@@ -929,12 +967,15 @@ function WalletManagementPage({
   anyRunning,
   onWalletsTextChange,
   onAccessPasswordChange,
+  onDataSpaceChange,
   onScanAll,
   onForceScanAll,
   onRenameWallet,
 }: {
   walletsText: string;
   accessPassword: string;
+  dataSpace: string;
+  archiveSyncState: ArchiveSyncState;
   records: WalletArchiveRecord[];
   validCount: number;
   invalidCount: number;
@@ -943,6 +984,7 @@ function WalletManagementPage({
   anyRunning: boolean;
   onWalletsTextChange: (value: string) => void;
   onAccessPasswordChange: (value: string) => void;
+  onDataSpaceChange: (value: string) => void;
   onScanAll: () => void;
   onForceScanAll: () => void;
   onRenameWallet: (address: string) => void;
@@ -966,7 +1008,7 @@ function WalletManagementPage({
           <MetricLine label="已归档" value={`${archivedWallets}/${validCount || 0}`} />
           <MetricLine label="待扫描" value={String(pendingCount)} />
           <MetricLine label="失败" value={String(failedCount)} />
-          <MetricLine label="访问码" value={accessCodeState} />
+          <MetricLine label="数据空间" value={dataSpace || DEFAULT_DATA_SPACE} />
         </div>
         <div className="wallet-management-actions">
           <button type="button" onClick={onScanAll} disabled={anyRunning || validCount === 0}>
@@ -1016,6 +1058,20 @@ function WalletManagementPage({
             />
             <small>只保存在本机浏览器。</small>
           </label>
+
+          <label className="access-code-panel">
+            <span>
+              <ShieldCheck size={16} /> 数据空间码
+            </span>
+            <input
+              type="text"
+              value={dataSpace}
+              onChange={(event) => onDataSpaceChange(event.target.value)}
+              placeholder={DEFAULT_DATA_SPACE}
+              autoComplete="off"
+            />
+            <small>不同用户使用不同数据空间码；换设备时填写同一个码即可恢复同一份归档。</small>
+          </label>
         </section>
 
         <aside className="wallet-management-side">
@@ -1023,6 +1079,10 @@ function WalletManagementPage({
             <div className="settings-card-title">
               <Gauge size={18} />
               <h2>归档状态</h2>
+            </div>
+            <div className={`archive-sync-status ${archiveSyncState.status}`}>
+              <span>{archiveSyncState.message}</span>
+              <small>访问码 {accessCodeState}</small>
             </div>
             <div className="wallet-archive-meter">
               <div>
@@ -2987,11 +3047,13 @@ async function syncServerArchive(params: {
   endDate: string;
   tenDayTarget: string;
   boostOverrides: string;
+  dataSpace: string;
   records: WalletArchiveRecord[];
   scanHistory: ScanHistoryRecord[];
   accessPassword: string;
-}) {
+}): Promise<{ ok: boolean; error?: string }> {
   const payload: ServerArchivePayload = {
+    workspaceId: params.dataSpace,
     walletsText: params.walletsText,
     endDate: params.endDate,
     tenDayTarget: params.tenDayTarget,
@@ -3010,19 +3072,62 @@ async function syncServerArchive(params: {
   };
 
   try {
-    await fetch("/api/archive", {
+    const response = await fetch("/api/archive", {
       method: "POST",
-      headers: archiveAccessHeaders(params.accessPassword, { "content-type": "application/json" }),
+      headers: archiveAccessHeaders(params.accessPassword, params.dataSpace, { "content-type": "application/json" }),
       body: JSON.stringify(payload),
     });
-  } catch {
-    // Server archive sync must never block the local calculator.
+    if (!response.ok) {
+      const errorPayload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(errorPayload.error || `HTTP ${response.status}`);
+    }
+    return { ok: true };
+  } catch (caught) {
+    const error = caught instanceof Error ? caught.message : String(caught);
+    return { ok: false, error };
   }
 }
 
-function archiveAccessHeaders(accessPassword: string, headers: Record<string, string> = {}): Record<string, string> {
+function archiveAccessHeaders(
+  accessPassword: string,
+  dataSpace: string,
+  headers: Record<string, string> = {},
+): Record<string, string> {
   const password = accessPassword.trim();
-  return password ? { ...headers, [ACCESS_HEADER]: password } : serverAccessHeaders(headers);
+  const workspace = normalizeDataSpace(dataSpace);
+  const baseHeaders = password ? { ...headers, [ACCESS_HEADER]: password } : serverAccessHeaders(headers);
+  return { ...baseHeaders, [WORKSPACE_HEADER]: workspace };
+}
+
+function mergeWalletTexts({
+  localText,
+  serverText,
+  preserveLocal,
+}: {
+  localText: string;
+  serverText: string;
+  preserveLocal: boolean;
+}): string {
+  if (!serverText.trim()) return localText;
+  if (!preserveLocal) return serverText;
+
+  const localEntries = parseWalletList(localText).entries;
+  const serverEntries = parseWalletList(serverText).entries;
+  const merged = new Map<string, WalletListEntry>();
+  for (const entry of serverEntries) merged.set(entry.address, entry);
+  for (const entry of localEntries) {
+    const serverEntry = merged.get(entry.address);
+    merged.set(entry.address, {
+      address: entry.address,
+      name: entry.name || serverEntry?.name || "",
+    });
+  }
+  return [...merged.values()].map((entry) => (entry.name ? `${entry.name} ${entry.address}` : entry.address)).join("\n");
+}
+
+function normalizeDataSpace(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, "-").slice(0, 80);
+  return normalized || DEFAULT_DATA_SPACE;
 }
 
 function readPersistedUiState(): PersistedUiState {

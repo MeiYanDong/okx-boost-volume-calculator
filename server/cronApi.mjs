@@ -1,4 +1,10 @@
-import { getServerArchive, isArchiveStoreConfigured, setServerArchive } from "./archiveStore.mjs";
+import {
+  getServerArchive,
+  isArchiveStoreConfigured,
+  listArchiveWorkspaces,
+  normalizeWorkspaceId,
+  setServerArchive,
+} from "./archiveStore.mjs";
 import { requestUrl, sendFeishuText, sendJson, validateAccess } from "./proxy.mjs";
 
 let cronJobModule;
@@ -17,24 +23,44 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
 
   const url = requestUrl(request);
   const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
-  const archive = await getServerArchive(env);
+  const requestedWorkspace = url.searchParams.get("workspace") || headerValue(request.headers, "x-okx-boost-workspace");
+  const workspaces = requestedWorkspace ? [normalizeWorkspaceId(requestedWorkspace)] : await listArchiveWorkspaces(env);
   const { runDailyRefresh } = await loadCronJob();
-  const result = await runDailyRefresh({
-    archive,
-    config,
-    onProgress: (message) => {
-      console.log(`[daily-refresh] ${message}`);
-    },
-  });
+  const results = [];
 
-  if (!dryRun) {
-    await setServerArchive(result.updatedArchive, env);
+  for (const workspaceId of workspaces) {
+    const archive = await getServerArchive(env, workspaceId);
+    const result = await runDailyRefresh({
+      archive,
+      config,
+      onProgress: (message) => {
+        console.log(`[daily-refresh][${workspaceId}] ${message}`);
+      },
+    });
+
+    if (!dryRun) {
+      await setServerArchive(result.updatedArchive, env, workspaceId);
+    }
+
+    let notified = false;
+    if (result.shouldNotify && !dryRun) {
+      await sendFeishuText(`数据空间：${workspaceId}\n${result.notificationText}`, config);
+      notified = true;
+    }
+
+    results.push({ workspaceId, result, notified });
   }
-  let notified = false;
-  if (result.shouldNotify && !dryRun) {
-    await sendFeishuText(result.notificationText, config);
-    notified = true;
-  }
+
+  const summary = results.reduce(
+    (acc, item) => ({
+      walletCount: acc.walletCount + item.result.summary.walletCount,
+      succeeded: acc.succeeded + item.result.summary.succeeded,
+      failed: acc.failed + item.result.summary.failed,
+      skipped: acc.skipped + item.result.summary.skipped,
+    }),
+    { walletCount: 0, succeeded: 0, failed: 0, skipped: 0 },
+  );
+  const firstResult = results[0]?.result;
 
   sendJson(
     response,
@@ -42,18 +68,25 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
     {
       ok: true,
       dryRun,
-      notified,
-      snapshotDate: result.snapshotDate,
-      shouldNotify: result.shouldNotify,
-      summary: result.summary,
-      forecast: result.forecastRows.map((row) => ({
-        snapshotDate: row.snapshotDate,
-        atRiskWallets: row.atRiskWallets,
-        archivedWallets: row.archivedWallets,
-        worstGap: row.worstGap,
-        expiredBoostVolume: row.expiredBoostVolume,
+      workspaceCount: results.length,
+      notified: results.some((item) => item.notified),
+      snapshotDate: firstResult?.snapshotDate || null,
+      shouldNotify: results.some((item) => item.result.shouldNotify),
+      summary,
+      workspaces: results.map((item) => ({
+        workspaceId: item.workspaceId,
+        notified: item.notified,
+        shouldNotify: item.result.shouldNotify,
+        summary: item.result.summary,
+        forecast: item.result.forecastRows.map((row) => ({
+          snapshotDate: row.snapshotDate,
+          atRiskWallets: row.atRiskWallets,
+          archivedWallets: row.archivedWallets,
+          worstGap: row.worstGap,
+          expiredBoostVolume: row.expiredBoostVolume,
+        })),
+        notificationPreview: dryRun ? item.result.notificationText : undefined,
       })),
-      notificationPreview: dryRun ? result.notificationText : undefined,
     },
     { "cache-control": "no-store" },
   );

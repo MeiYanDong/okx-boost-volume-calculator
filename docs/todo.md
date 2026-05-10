@@ -37,6 +37,8 @@
   子 todo：[S15 到期交易量文案收敛](./todos/2026-05-09-expiring-volume-copy.md)
 - [x] S16 服务端归档与每日自动刷新
   子 todo：[S16 服务端归档与每日自动刷新](./todos/2026-05-09-server-cron-refresh.md)
+- [ ] S17 归档数据空间隔离
+  子 todo：[S17 归档数据空间隔离](./todos/2026-05-10-archive-workspaces.md)
 
 ## 维护规则
 
