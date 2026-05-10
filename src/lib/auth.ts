@@ -1,4 +1,5 @@
 const AUTH_STORAGE_KEY = "okx-boost:auth-session:v1";
+const ACCESS_HEADER = "x-okx-boost-access";
 
 export type AuthUser = {
   id: string;
@@ -13,6 +14,24 @@ export type AuthSession = {
 };
 
 export type AuthMode = "signin" | "redeem";
+
+export type AdminInvite = {
+  id: string;
+  email: string;
+  role: "admin" | "user";
+  maxWallets: number;
+  dailyRefreshLimit: number;
+  dailyRescanLimit: number;
+  expiresAt: string;
+  usedAt: string;
+  usedBy: string;
+  createdAt: string;
+};
+
+export type CreatedInvite = {
+  code: string;
+  invite: AdminInvite;
+};
 
 export function readAuthSession(): AuthSession | null {
   const storage = safeStorage();
@@ -74,15 +93,55 @@ export async function validateAuthSession(session: AuthSession): Promise<boolean
   return Boolean(payload.user?.id);
 }
 
-async function authRequest(body: Record<string, unknown>): Promise<unknown> {
+export async function createAdminInvite(
+  params: {
+    email: string;
+    maxWallets: number;
+    expiresInDays: number;
+  },
+  accessPassword: string,
+): Promise<CreatedInvite> {
+  const payload = await authRequest(
+    {
+      action: "create-invite",
+      email: params.email,
+      maxWallets: params.maxWallets,
+      expiresInDays: params.expiresInDays,
+    },
+    adminHeaders(accessPassword),
+  );
+  if (!isObject(payload) || typeof payload.code !== "string" || !isAdminInvite(payload.invite)) {
+    throw new Error("创建邀请码响应不完整。");
+  }
+  return { code: payload.code, invite: payload.invite };
+}
+
+export async function listAdminInvites(accessPassword: string): Promise<AdminInvite[]> {
+  const payload = await authRequest({ action: "list-invites" }, adminHeaders(accessPassword));
+  if (!isObject(payload) || !Array.isArray(payload.invites)) throw new Error("邀请码列表响应不完整。");
+  return payload.invites.filter(isAdminInvite);
+}
+
+export async function revokeAdminInvite(inviteId: string, accessPassword: string): Promise<AdminInvite> {
+  const payload = await authRequest({ action: "revoke-invite", inviteId }, adminHeaders(accessPassword));
+  if (!isObject(payload) || !isAdminInvite(payload.invite)) throw new Error("撤销邀请码响应不完整。");
+  return payload.invite;
+}
+
+async function authRequest(body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<unknown> {
   const response = await fetch("/api/auth", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
   const payload = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) throw new Error(payload.error || `认证请求失败 HTTP ${response.status}`);
   return payload;
+}
+
+function adminHeaders(accessPassword: string): Record<string, string> {
+  const password = accessPassword.trim();
+  return password ? { [ACCESS_HEADER]: password } : {};
 }
 
 function parseSessionPayload(payload: unknown): AuthSession {
@@ -99,6 +158,22 @@ function isAuthSession(value: unknown): value is AuthSession {
     typeof value.expiresAt === "number" &&
     typeof value.user.id === "string" &&
     typeof value.user.email === "string"
+  );
+}
+
+function isAdminInvite(value: unknown): value is AdminInvite {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.email === "string" &&
+    (value.role === "admin" || value.role === "user") &&
+    typeof value.maxWallets === "number" &&
+    typeof value.dailyRefreshLimit === "number" &&
+    typeof value.dailyRescanLimit === "number" &&
+    typeof value.expiresAt === "string" &&
+    typeof value.usedAt === "string" &&
+    typeof value.usedBy === "string" &&
+    typeof value.createdAt === "string"
   );
 }
 

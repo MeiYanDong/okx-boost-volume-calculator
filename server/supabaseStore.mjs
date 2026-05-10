@@ -75,6 +75,30 @@ export async function createInvite(input, env = process.env) {
   };
 }
 
+export async function listInvites(env = process.env) {
+  ensureSupabaseConfigured(env);
+  const rows = await restSelect(env, "invites", {
+    select: "id,email,role,max_wallets,daily_refresh_limit,daily_rescan_limit,expires_at,used_at,used_by,created_at",
+    order: "created_at.desc",
+    limit: "50",
+  });
+  return rows.map(redactInvite);
+}
+
+export async function revokeInvite(input, env = process.env) {
+  ensureSupabaseConfigured(env);
+  const inviteId = String(input?.inviteId || input?.id || "").trim();
+  if (!isUuid(inviteId)) throw userError("邀请码 ID 无效。", 400);
+  const [invite] = await restPatch(
+    env,
+    "invites",
+    { id: `eq.${inviteId}`, used_at: "is.null" },
+    { expires_at: new Date().toISOString() },
+  );
+  if (!invite) throw userError("邀请码不存在或已被使用。", 404);
+  return redactInvite(invite);
+}
+
 export async function redeemInvite(input, env = process.env) {
   ensureSupabaseConfigured(env);
   const code = normalizeInviteCode(input?.inviteCode || input?.code);
@@ -598,15 +622,23 @@ function generateInviteCode() {
 function redactInvite(invite) {
   if (!invite) return null;
   return {
-    id: invite.id,
+    id: String(invite.id || ""),
     email: invite.email || "",
     role: invite.role || "user",
-    maxWallets: invite.max_wallets,
-    dailyRefreshLimit: invite.daily_refresh_limit,
-    dailyRescanLimit: invite.daily_rescan_limit,
-    expiresAt: invite.expires_at,
-    usedAt: invite.used_at,
+    maxWallets: Number(invite.max_wallets || 0),
+    dailyRefreshLimit: Number(invite.daily_refresh_limit || 0),
+    dailyRescanLimit: Number(invite.daily_rescan_limit || 0),
+    expiresAt: invite.expires_at || "",
+    usedAt: invite.used_at || "",
+    usedBy: invite.used_by || "",
+    createdAt: invite.created_at || "",
   };
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || ""),
+  );
 }
 
 function workspaceToClient(workspace) {

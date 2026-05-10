@@ -4,11 +4,11 @@
 
 ## 当前阶段
 
-S19：邀请制登录与 Supabase 云端归档已完成。
+S20：管理员邀请码管理页已完成。
 
-S19 已将 Supabase 从基础表结构接入到应用工作流：用户可通过邀请码注册登录，登录后归档写入 Supabase 账号工作区；未登录时继续保留私有访问码和 Upstash 数据空间兼容。
+S20 将邀请码创建、列表读取和撤销入口放进偏好设置页，管理员用私有访问码即可完成邀请制用户管理，不再依赖手写 API 请求。
 
-子 plan：[S19 邀请制登录与 Supabase 云端归档](./plans/2026-05-10-supabase-auth-archive.md)
+子 plan：[S20 管理员邀请码管理页](./plans/2026-05-10-invite-admin-page.md)
 
 ## 阶段索引
 
@@ -34,6 +34,7 @@ S19 已将 Supabase 从基础表结构接入到应用工作流：用户可通过
 | S17 归档数据空间隔离 | 已完成 | [子 plan](./plans/2026-05-10-archive-workspaces.md) | 用数据空间隔离用户归档，避免新增地址被旧归档覆盖 |
 | S18 Supabase 邀请制基础设施 | 已完成 | [子 plan](./plans/2026-05-10-supabase-invite-foundation.md) | 建立邀请制多用户的数据层、RLS 和 Data API 权限 |
 | S19 邀请制登录与 Supabase 云端归档 | 已完成 | [子 plan](./plans/2026-05-10-supabase-auth-archive.md) | 登录用户按 Supabase 账号保存归档，Cron 同时支持 Supabase 与旧 Upstash |
+| S20 管理员邀请码管理页 | 已完成 | [子 plan](./plans/2026-05-10-invite-admin-page.md) | 在偏好设置中创建、查看和撤销邀请码 |
 
 ## 执行原则
 

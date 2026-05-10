@@ -1,4 +1,13 @@
-import { createInvite, getSupabaseUserFromRequest, isSupabaseConfigured, redeemInvite, refreshAuthSession, signInWithPassword } from "./supabaseStore.mjs";
+import {
+  createInvite,
+  getSupabaseUserFromRequest,
+  isSupabaseConfigured,
+  listInvites,
+  redeemInvite,
+  refreshAuthSession,
+  revokeInvite,
+  signInWithPassword,
+} from "./supabaseStore.mjs";
 import { readJsonBody, requestUrl, sendJson, validateAccess } from "./proxy.mjs";
 
 export async function handleAuthApi(request, response, config, env = process.env) {
@@ -57,6 +66,20 @@ export async function handleAuthApi(request, response, config, env = process.env
     validateAdminAccess(request, config, env);
     const result = await createInvite(body, env);
     sendJson(response, 200, { ok: true, ...result }, { "cache-control": "no-store" });
+    return;
+  }
+
+  if (action === "list-invites") {
+    validateAdminAccess(request, config, env);
+    const invites = await listInvites(env);
+    sendJson(response, 200, { ok: true, invites }, { "cache-control": "no-store" });
+    return;
+  }
+
+  if (action === "revoke-invite") {
+    validateAdminAccess(request, config, env);
+    const invite = await revokeInvite(body, env);
+    sendJson(response, 200, { ok: true, invite }, { "cache-control": "no-store" });
     return;
   }
 

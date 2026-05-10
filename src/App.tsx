@@ -33,13 +33,17 @@ import { formatNumber, formatUsd, shortHash } from "./lib/format";
 import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPassword } from "./lib/serverAccess";
 import {
   authHeaders,
+  createAdminInvite,
+  listAdminInvites,
   readAuthSession,
   redeemInvite,
   refreshAuthSession,
+  revokeAdminInvite,
   shouldRefreshSession,
   signInWithEmail,
   validateAuthSession,
   writeAuthSession,
+  type AdminInvite,
   type AuthMode,
   type AuthSession,
 } from "./lib/auth";
@@ -85,6 +89,11 @@ type ArchiveSyncState = {
 type AuthRequestState = {
   status: "idle" | "loading" | "ready" | "error";
   message: string;
+};
+type InviteAdminState = {
+  status: "idle" | "loading" | "ready" | "error";
+  message: string;
+  code?: string;
 };
 type ScopedBonusRules = {
   scoped: Record<string, number>;
@@ -823,7 +832,9 @@ export default function App() {
             targetTotal={targetTotal}
             portfolio={portfolio}
             scanHistoryCount={scanHistoryRows.length}
+            accessPassword={accessPassword}
             onTenDayTargetChange={setTenDayTarget}
+            onAccessPasswordChange={setAccessPassword}
           />
         )}
 
@@ -2099,14 +2110,77 @@ function SettingsPage({
   targetTotal,
   portfolio,
   scanHistoryCount,
+  accessPassword,
   onTenDayTargetChange,
+  onAccessPasswordChange,
 }: {
   tenDayTargetText: string;
   targetTotal: number | null;
   portfolio: PortfolioSummary;
   scanHistoryCount: number;
+  accessPassword: string;
   onTenDayTargetChange: (value: string) => void;
+  onAccessPasswordChange: (value: string) => void;
 }) {
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteMaxWallets, setInviteMaxWallets] = useState("20");
+  const [inviteExpiresInDays, setInviteExpiresInDays] = useState("14");
+  const [inviteRows, setInviteRows] = useState<AdminInvite[]>([]);
+  const [inviteState, setInviteState] = useState<InviteAdminState>({ status: "idle", message: "" });
+  const adminReady = Boolean(accessPassword.trim());
+
+  async function refreshInvites() {
+    if (!adminReady) {
+      setInviteState({ status: "error", message: "请先填写私有访问码。" });
+      return;
+    }
+    setInviteState({ status: "loading", message: "正在读取邀请码..." });
+    try {
+      const rows = await listAdminInvites(accessPassword);
+      setInviteRows(rows);
+      setInviteState({ status: "ready", message: `已读取 ${rows.length} 个邀请码。` });
+    } catch (caught) {
+      setInviteState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function createInvite() {
+    if (!adminReady || inviteState.status === "loading") {
+      setInviteState({ status: "error", message: "请先填写私有访问码。" });
+      return;
+    }
+    setInviteState({ status: "loading", message: "正在生成邀请码..." });
+    try {
+      const created = await createAdminInvite(
+        {
+          email: inviteEmail,
+          maxWallets: Number(inviteMaxWallets) || 20,
+          expiresInDays: Number(inviteExpiresInDays) || 14,
+        },
+        accessPassword,
+      );
+      setInviteEmail("");
+      const rows = await listAdminInvites(accessPassword).catch(() => inviteRows);
+      setInviteRows(rows);
+      setInviteState({ status: "ready", message: "邀请码已生成，只展示这一次。", code: created.code });
+    } catch (caught) {
+      setInviteState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function revokeInvite(id: string) {
+    if (!adminReady || inviteState.status === "loading") return;
+    if (!window.confirm("确认撤销这个未使用的邀请码？")) return;
+    setInviteState({ status: "loading", message: "正在撤销邀请码..." });
+    try {
+      const revoked = await revokeAdminInvite(id, accessPassword);
+      setInviteRows((rows) => rows.map((row) => (row.id === revoked.id ? revoked : row)));
+      setInviteState({ status: "ready", message: "邀请码已撤销。" });
+    } catch (caught) {
+      setInviteState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
   return (
     <section className="work-page">
       <PageHeader
@@ -2150,6 +2224,109 @@ function SettingsPage({
             <MetricLine label="扫描记录" value={String(scanHistoryCount)} />
             <MetricLine label="已归档钱包" value={String(portfolio.archivedWallets)} />
             <MetricLine label="待处理钱包" value={String(portfolio.pendingWallets)} />
+          </div>
+        </section>
+
+        <section className="settings-card invite-admin-card">
+          <div className="settings-card-title">
+            <LockKeyhole size={18} />
+            <h2>邀请码管理</h2>
+          </div>
+
+          <label className="target-input-control">
+            <span>管理员私有访问码</span>
+            <input
+              type="password"
+              value={accessPassword}
+              onChange={(event) => onAccessPasswordChange(event.target.value)}
+              placeholder="填写后可创建和撤销邀请码"
+              autoComplete="current-password"
+            />
+            <small>只保存在本机浏览器，用于调用管理员接口。</small>
+          </label>
+
+          <div className="invite-form-grid">
+            <label>
+              <span>绑定邮箱</span>
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(event) => setInviteEmail(event.target.value)}
+                placeholder="可留空"
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              <span>钱包额度</span>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                value={inviteMaxWallets}
+                onChange={(event) => setInviteMaxWallets(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>有效天数</span>
+              <input
+                type="number"
+                min="1"
+                max="365"
+                value={inviteExpiresInDays}
+                onChange={(event) => setInviteExpiresInDays(event.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="invite-admin-actions">
+            <button type="button" onClick={createInvite} disabled={!adminReady || inviteState.status === "loading"}>
+              生成邀请码
+            </button>
+            <button type="button" onClick={refreshInvites} disabled={!adminReady || inviteState.status === "loading"}>
+              刷新列表
+            </button>
+          </div>
+
+          {inviteState.code && (
+            <div className="invite-code-box">
+              <span>新邀请码</span>
+              <strong>{inviteState.code}</strong>
+              <small>请立即发给用户；刷新后不会再显示原文。</small>
+            </div>
+          )}
+
+          {inviteState.message && <p className={`invite-admin-message ${inviteState.status}`}>{inviteState.message}</p>}
+        </section>
+
+        <section className="settings-card invite-list-card">
+          <div className="settings-card-title">
+            <ClipboardList size={18} />
+            <h2>最近邀请码</h2>
+          </div>
+          <div className="invite-list">
+            {inviteRows.map((invite) => {
+              const status = inviteStatus(invite);
+              return (
+                <article className="invite-row" key={invite.id}>
+                  <div>
+                    <strong>{invite.email || "未绑定邮箱"}</strong>
+                    <span>
+                      {formatSavedAt(invite.createdAt)} 创建 · {invite.maxWallets} 个钱包
+                    </span>
+                  </div>
+                  <em className={status.tone}>{status.label}</em>
+                  <small>到期 {formatDateTime(invite.expiresAt)}</small>
+                  <button
+                    type="button"
+                    onClick={() => revokeInvite(invite.id)}
+                    disabled={!adminReady || status.tone !== "active" || inviteState.status === "loading"}
+                  >
+                    撤销
+                  </button>
+                </article>
+              );
+            })}
+            {inviteRows.length === 0 && <div className="empty-detail-state">填写私有访问码后刷新列表。</div>}
           </div>
         </section>
       </div>
@@ -3186,6 +3363,27 @@ function formatSavedAt(savedAt?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function inviteStatus(invite: AdminInvite): { label: string; tone: "active" | "used" | "expired" } {
+  if (invite.usedAt) return { label: "已使用", tone: "used" };
+  if (invite.expiresAt && new Date(invite.expiresAt).getTime() <= Date.now()) {
+    return { label: "已过期", tone: "expired" };
+  }
+  return { label: "可使用", tone: "active" };
 }
 
 function parseOptionalAmount(raw: string): number | null {

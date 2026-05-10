@@ -2212,6 +2212,174 @@ tr:last-child td {
   gap: 12px;
 }
 
+.invite-admin-card,
+.invite-list-card {
+  grid-column: span 2;
+}
+
+.invite-form-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 130px 130px;
+  gap: 12px;
+}
+
+.invite-form-grid label {
+  display: grid;
+  gap: 8px;
+}
+
+.invite-form-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.invite-form-grid input {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--ink);
+  padding: 0 11px;
+}
+
+.invite-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.invite-admin-actions button,
+.invite-row button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+  padding: 0 14px;
+}
+
+.invite-admin-actions button:not(:disabled):hover,
+.invite-row button:not(:disabled):hover {
+  border-color: rgba(186, 255, 26, 0.32);
+  background: var(--lime-soft);
+  color: var(--lime);
+}
+
+.invite-admin-actions button:disabled,
+.invite-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.invite-code-box {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid rgba(186, 255, 26, 0.34);
+  border-radius: 8px;
+  background: var(--lime-soft);
+}
+
+.invite-code-box span,
+.invite-code-box small,
+.invite-admin-message {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.invite-code-box strong {
+  color: var(--lime);
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 17px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.invite-admin-message {
+  margin: 0;
+}
+
+.invite-admin-message.error {
+  color: var(--danger);
+}
+
+.invite-admin-message.ready {
+  color: var(--lime);
+}
+
+.invite-list {
+  display: grid;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.invite-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 90px minmax(160px, auto) 86px;
+  gap: 12px;
+  align-items: center;
+  min-height: 68px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.invite-row:last-child {
+  border-bottom: 0;
+}
+
+.invite-row strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 880;
+  overflow-wrap: anywhere;
+}
+
+.invite-row span,
+.invite-row small {
+  display: block;
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.invite-row em {
+  justify-self: start;
+  min-width: 66px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  text-align: center;
+}
+
+.invite-row em.active {
+  border-color: rgba(186, 255, 26, 0.34);
+  background: var(--lime-soft);
+  color: var(--lime);
+}
+
+.invite-row em.used {
+  border-color: rgba(37, 196, 94, 0.26);
+  background: rgba(37, 196, 94, 0.12);
+  color: var(--green);
+}
+
+.invite-row em.expired {
+  border-color: rgba(255, 102, 85, 0.3);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .drawer-layer {
   position: fixed;
   inset: 0;
@@ -2800,6 +2968,11 @@ a {
   .forecast-wallets {
     grid-column: 1 / -1;
   }
+
+  .invite-admin-card,
+  .invite-list-card {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 920px) {
@@ -2826,6 +2999,7 @@ a {
   .editor-grid,
   .overview-summary-grid,
   .bonus-card-grid,
+  .invite-form-grid,
   .settings-stat-grid,
   .forecast-row,
   .wallet-management-grid {
@@ -2845,6 +3019,15 @@ a {
 
   .detail-drawer {
     width: 100vw;
+  }
+
+  .invite-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .invite-row small {
+    grid-column: 1 / -1;
+    margin-top: 0;
   }
 }
 
@@ -3002,5 +3185,13 @@ a {
   .bonus-presets {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
+  }
+
+  .invite-row {
+    grid-template-columns: 1fr;
+  }
+
+  .invite-row button {
+    width: 100%;
   }
 }
