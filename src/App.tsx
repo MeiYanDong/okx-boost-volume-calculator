@@ -2290,18 +2290,18 @@ function SettingsPage({
       setNotificationState({ status: "error", message: "请先登录账号。" });
       return;
     }
-    setNotificationState({ status: "loading", message: "正在发送测试消息..." });
+    setNotificationState({ status: "loading", message: "正在读取真实归档并发送测试..." });
     try {
       const response = await fetch("/api/feishu", {
         method: "POST",
         headers: authHeaders(authSession, { "content-type": "application/json" }),
         body: JSON.stringify({
-          text: `OKX Boost 飞书测试\n用途：验证当前账号保存的机器人配置可用。\n说明：测试消息不包含钱包地址、交易哈希或交易量。\n时间：${new Date().toLocaleString()}`,
+          mode: "real-data-test",
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-      setNotificationState({ status: "ready", message: "测试消息已发送。" });
+      setNotificationState({ status: "ready", message: "真实数据测试已发送。" });
     } catch (caught) {
       setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
     }
@@ -2489,7 +2489,7 @@ function SettingsPage({
               />
               <span>
                 <strong>启用账号级自动提醒</strong>
-                <small>手动风险提醒和每日 Cron 都优先使用当前登录账号的配置。</small>
+                <small>手动风险提醒、真实数据测试和每日 Cron 都只使用当前登录账号的配置。</small>
               </span>
             </label>
             <div className={notificationSettings?.feishuConfigured ? "notification-status-pill ready" : "notification-status-pill"}>
@@ -2546,7 +2546,7 @@ function SettingsPage({
               onClick={sendNotificationTest}
               disabled={!authSession || notificationBusy || !notificationSettings?.feishuConfigured || !feishuEnabled}
             >
-              发送测试
+              发送真实数据测试
             </button>
             <button type="button" onClick={refreshNotificationSettings} disabled={!authSession || notificationBusy}>
               刷新配置

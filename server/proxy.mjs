@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { buildFeishuRealDataTestMessage } from "./feishuDrill.mjs";
 import { getSupabaseUserFromRequest, getUserNotificationTarget } from "./supabaseStore.mjs";
 
 const maxBodyBytes = 1_000_000;
@@ -13,12 +14,14 @@ const allowedRpcMethods = new Set([
 ]);
 
 export function createProxyConfig(env) {
+  const rawBscRpcUrl = envValue(env, "BSC_RPC_URL", "VITE_BSC_RPC_URL");
+  const rawAnkrMultichainRpcUrl = normalizeAnkrRpcUrl(
+    envValue(env, "ANKR_MULTICHAIN_RPC_URL", "VITE_ANKR_MULTICHAIN_RPC_URL") || deriveAnkrMultichainUrl(rawBscRpcUrl),
+  );
   return {
     accessPassword: envValue(env, "ACCESS_PASSWORD"),
-    bscRpcUrl: envValue(env, "BSC_RPC_URL", "VITE_BSC_RPC_URL") || "https://bsc-rpc.publicnode.com",
-    ankrMultichainRpcUrl:
-      envValue(env, "ANKR_MULTICHAIN_RPC_URL", "VITE_ANKR_MULTICHAIN_RPC_URL") ||
-      deriveAnkrMultichainUrl(envValue(env, "BSC_RPC_URL", "VITE_BSC_RPC_URL")),
+    bscRpcUrl: rawBscRpcUrl || deriveAnkrBscRpcUrl(rawAnkrMultichainRpcUrl) || "https://bsc-rpc.publicnode.com",
+    ankrMultichainRpcUrl: rawAnkrMultichainRpcUrl,
     etherscanApiKey: envValue(env, "ETHERSCAN_API_KEY", "VITE_ETHERSCAN_API_KEY"),
     etherscanApiUrl: "https://api.etherscan.io/v2/api",
   };
@@ -98,7 +101,6 @@ export async function handleFeishuNotify(request, response, config, env = proces
   }
 
   const body = await readJsonBody(request);
-  const text = validateFeishuNotifyBody(body);
   const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
   if (auth?.user?.id) {
     const target = await getUserNotificationTarget(env, auth.user);
@@ -106,12 +108,33 @@ export async function handleFeishuNotify(request, response, config, env = proces
       sendJson(response, 400, { error: "Feishu webhook is not enabled for this user" }, { "cache-control": "no-store" });
       return;
     }
+    const drill =
+      body?.mode === "real-data-test"
+        ? await buildFeishuRealDataTestMessage({
+            env,
+            user: auth.user,
+            config,
+            notifyFutureDays: target.notifyFutureDays,
+          })
+        : null;
+    const text = drill ? drill.text : validateFeishuNotifyBody(body);
     await sendFeishuText(text, {
       ...config,
       feishuWebhookUrl: target.webhookUrl,
       feishuWebhookSecret: target.webhookSecret,
     });
-    sendJson(response, 200, { ok: true, provider: "supabase" }, { "cache-control": "no-store" });
+    sendJson(
+      response,
+      200,
+      {
+        ok: true,
+        provider: "supabase",
+        mode: drill ? "real-data-test" : "text",
+        snapshotDate: drill?.snapshotDate,
+        summary: drill?.summary,
+      },
+      { "cache-control": "no-store" },
+    );
     return;
   }
 
@@ -325,11 +348,42 @@ function deriveAnkrMultichainUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
     if (!url.hostname.includes("ankr.com")) return "";
-    const token = url.pathname.split("/").filter(Boolean).pop();
+    const token = ankrTokenFromUrl(url);
     return token ? `https://rpc.ankr.com/multichain/${token}` : "";
   } catch {
     return "";
   }
+}
+
+function deriveAnkrBscRpcUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!url.hostname.includes("ankr.com")) return "";
+    const token = ankrTokenFromUrl(url);
+    return token ? `https://rpc.ankr.com/bsc/${token}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeAnkrRpcUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!url.hostname.includes("ankr.com")) return rawUrl;
+    const segments = url.pathname.split("/").filter(Boolean);
+    const service = segments.find((segment) => ["bsc", "multichain"].includes(segment));
+    const token = ankrTokenFromUrl(url);
+    return service && token ? `https://rpc.ankr.com/${service}/${token}` : rawUrl;
+  } catch {
+    return rawUrl;
+  }
+}
+
+function ankrTokenFromUrl(url) {
+  const segments = url.pathname.split("/").filter(Boolean);
+  const serviceIndex = segments.findIndex((segment) => ["bsc", "multichain"].includes(segment));
+  if (serviceIndex >= 0 && segments[serviceIndex + 1]) return segments[serviceIndex + 1];
+  return segments.find((segment) => /^[a-fA-F0-9]{32,}$/.test(segment)) || "";
 }
 
 function isAddress(value) {

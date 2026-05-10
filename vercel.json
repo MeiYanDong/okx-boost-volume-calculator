@@ -3,6 +3,9 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
+    "api/feishu.mjs": {
+      "maxDuration": 300
+    },
     "api/cron/daily-refresh.mjs": {
       "maxDuration": 300
     }
