@@ -315,10 +315,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [accessPassword]);
+  }, [accessPassword, dataSpace]);
 
   useEffect(() => {
     if (!serverArchiveReady || anyRunning) return;
+    if (shouldSkipServerArchiveSync(walletsText, records, scanHistory)) {
+      setArchiveSyncState({ status: "idle", message: "添加钱包或完成扫描后同步服务端归档" });
+      return;
+    }
     const timer = window.setTimeout(() => {
       setArchiveSyncState({ status: "saving", message: "正在同步服务端归档..." });
       void syncServerArchive({
@@ -3040,6 +3044,17 @@ function hydrateRecordsFromServerArchive(
       savedAt: archived?.savedAt,
     };
   });
+}
+
+function shouldSkipServerArchiveSync(
+  walletsText: string,
+  records: WalletArchiveRecord[],
+  scanHistory: ScanHistoryRecord[],
+): boolean {
+  const addresses = parseWalletList(walletsText).addresses;
+  const onlyDefaultSampleWallet = addresses.length === 1 && addresses[0] === normalizeAddress(SAMPLE_WALLET);
+  const hasArchivedData = records.some((record) => record.result || record.savedAt);
+  return onlyDefaultSampleWallet && !hasArchivedData && scanHistory.length === 0;
 }
 
 async function syncServerArchive(params: {
