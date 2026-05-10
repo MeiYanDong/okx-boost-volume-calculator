@@ -2237,7 +2237,8 @@ tr:last-child td {
 }
 
 .invite-admin-card,
-.invite-list-card {
+.invite-list-card,
+.user-list-card {
   grid-column: span 2;
 }
 
@@ -2275,7 +2276,8 @@ tr:last-child td {
 }
 
 .invite-admin-actions button,
-.invite-row button {
+.invite-row button,
+.user-row button {
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2288,14 +2290,16 @@ tr:last-child td {
 }
 
 .invite-admin-actions button:not(:disabled):hover,
-.invite-row button:not(:disabled):hover {
+.invite-row button:not(:disabled):hover,
+.user-row button:not(:disabled):hover {
   border-color: rgba(186, 255, 26, 0.32);
   background: var(--lime-soft);
   color: var(--lime);
 }
 
 .invite-admin-actions button:disabled,
-.invite-row button:disabled {
+.invite-row button:disabled,
+.user-row button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -2337,7 +2341,8 @@ tr:last-child td {
   color: var(--lime);
 }
 
-.invite-list {
+.invite-list,
+.user-list {
   display: grid;
   max-height: 420px;
   overflow-y: auto;
@@ -2345,9 +2350,9 @@ tr:last-child td {
   border-radius: 8px;
 }
 
-.invite-row {
+.invite-row,
+.user-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 90px minmax(160px, auto) 86px;
   gap: 12px;
   align-items: center;
   min-height: 68px;
@@ -2355,11 +2360,21 @@ tr:last-child td {
   border-bottom: 1px solid var(--line);
 }
 
-.invite-row:last-child {
+.invite-row {
+  grid-template-columns: minmax(220px, 1fr) 90px minmax(160px, auto) 86px;
+}
+
+.user-row {
+  grid-template-columns: minmax(220px, 1fr) 78px minmax(112px, 140px) 96px 80px;
+}
+
+.invite-row:last-child,
+.user-row:last-child {
   border-bottom: 0;
 }
 
-.invite-row strong {
+.invite-row strong,
+.user-row strong {
   color: var(--ink);
   font-size: 14px;
   font-weight: 880;
@@ -2367,7 +2382,9 @@ tr:last-child td {
 }
 
 .invite-row span,
-.invite-row small {
+.invite-row small,
+.user-row span,
+.user-row small {
   display: block;
   margin-top: 4px;
   color: var(--faint);
@@ -2375,7 +2392,8 @@ tr:last-child td {
   font-weight: 740;
 }
 
-.invite-row em {
+.invite-row em,
+.user-row em {
   justify-self: start;
   min-width: 66px;
   padding: 5px 9px;
@@ -2387,7 +2405,8 @@ tr:last-child td {
   text-align: center;
 }
 
-.invite-row em.active {
+.invite-row em.active,
+.user-row em.active {
   border-color: rgba(186, 255, 26, 0.34);
   background: var(--lime-soft);
   color: var(--lime);
@@ -2400,6 +2419,40 @@ tr:last-child td {
 }
 
 .invite-row em.expired {
+  border-color: rgba(255, 102, 85, 0.3);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.user-row em.disabled {
+  border-color: rgba(255, 102, 85, 0.3);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.user-row label {
+  display: grid;
+  gap: 6px;
+}
+
+.user-row label span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.user-row input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--ink);
+  padding: 0 10px;
+}
+
+.user-row button.danger-action:not(:disabled):hover {
   border-color: rgba(255, 102, 85, 0.3);
   background: var(--danger-soft);
   color: var(--danger);
@@ -2995,7 +3048,8 @@ a {
   }
 
   .invite-admin-card,
-  .invite-list-card {
+  .invite-list-card,
+  .user-list-card {
     grid-column: auto;
   }
 }
@@ -3046,13 +3100,19 @@ a {
     width: 100vw;
   }
 
-  .invite-row {
+  .invite-row,
+  .user-row {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .invite-row small {
+  .invite-row small,
+  .user-row small {
     grid-column: 1 / -1;
     margin-top: 0;
+  }
+
+  .user-row label {
+    grid-column: 1 / -1;
   }
 }
 
@@ -3212,11 +3272,13 @@ a {
     grid-template-columns: repeat(4, 1fr);
   }
 
-  .invite-row {
+  .invite-row,
+  .user-row {
     grid-template-columns: 1fr;
   }
 
-  .invite-row button {
+  .invite-row button,
+  .user-row button {
     width: 100%;
   }
 }

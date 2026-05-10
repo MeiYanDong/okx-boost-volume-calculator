@@ -34,6 +34,7 @@ import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPasswor
 import {
   authHeaders,
   createAdminInvite,
+  listAdminUsers,
   listAdminInvites,
   readAuthSession,
   redeemInvite,
@@ -42,9 +43,11 @@ import {
   revokeAdminInvite,
   shouldRefreshSession,
   signInWithEmail,
+  updateAdminUser,
   validateAuthSession,
   writeAuthSession,
   type AdminInvite,
+  type AdminUserProfile,
   type AuthMode,
   type AuthSession,
 } from "./lib/auth";
@@ -2185,6 +2188,9 @@ function SettingsPage({
   const [inviteExpiresInDays, setInviteExpiresInDays] = useState("14");
   const [inviteRows, setInviteRows] = useState<AdminInvite[]>([]);
   const [inviteState, setInviteState] = useState<InviteAdminState>({ status: "idle", message: "" });
+  const [userRows, setUserRows] = useState<AdminUserProfile[]>([]);
+  const [userQuotaDrafts, setUserQuotaDrafts] = useState<Record<string, string>>({});
+  const [userState, setUserState] = useState<InviteAdminState>({ status: "idle", message: "" });
   const isAdminSession = authSession?.user.role === "admin" && authSession.user.status !== "disabled";
   const adminAuth = { session: isAdminSession ? authSession : null, accessPassword };
   const adminReady = isAdminSession || Boolean(accessPassword.trim());
@@ -2231,6 +2237,60 @@ function SettingsPage({
       });
     } catch (caught) {
       setInviteState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function refreshUsers() {
+    if (!adminReady) {
+      setUserState({ status: "error", message: "请先登录管理员账号，或在首个管理员初始化时填写私有访问码。" });
+      return;
+    }
+    setUserState({ status: "loading", message: "正在读取用户列表..." });
+    try {
+      const rows = await listAdminUsers(adminAuth);
+      setUserRows(rows);
+      setUserQuotaDrafts(Object.fromEntries(rows.map((row) => [row.id, String(row.maxWallets || "")])));
+      setUserState({ status: "ready", message: `已读取 ${rows.length} 个用户。` });
+    } catch (caught) {
+      setUserState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function saveUserQuota(row: AdminUserProfile) {
+    if (!adminReady || userState.status === "loading") return;
+    const maxWallets = Number(userQuotaDrafts[row.id]);
+    if (!Number.isInteger(maxWallets) || maxWallets < 1 || maxWallets > 500) {
+      setUserState({ status: "error", message: "钱包额度必须是 1 到 500 的整数。" });
+      return;
+    }
+    setUserState({ status: "loading", message: "正在更新钱包额度..." });
+    try {
+      const updated = await updateAdminUser({ userId: row.id, maxWallets }, adminAuth);
+      setUserRows((rows) => rows.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+      setUserQuotaDrafts((drafts) => ({ ...drafts, [updated.id]: String(updated.maxWallets || "") }));
+      setUserState({ status: "ready", message: "钱包额度已更新。" });
+      void refreshUsers();
+    } catch (caught) {
+      setUserState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function toggleUserStatus(row: AdminUserProfile) {
+    if (!adminReady || userState.status === "loading") return;
+    const nextStatus = row.status === "active" ? "disabled" : "active";
+    if (nextStatus === "disabled" && row.id === authSession?.user.id) {
+      setUserState({ status: "error", message: "不能禁用当前登录的管理员账号。" });
+      return;
+    }
+    if (nextStatus === "disabled" && !window.confirm(`确认禁用 ${row.email}？禁用后该账号不能扫描或同步归档。`)) return;
+    setUserState({ status: "loading", message: nextStatus === "active" ? "正在启用用户..." : "正在禁用用户..." });
+    try {
+      const updated = await updateAdminUser({ userId: row.id, status: nextStatus }, adminAuth);
+      setUserRows((rows) => rows.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+      setUserState({ status: "ready", message: nextStatus === "active" ? "用户已启用。" : "用户已禁用。" });
+      void refreshUsers();
+    } catch (caught) {
+      setUserState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
     }
   }
 
@@ -2413,6 +2473,59 @@ function SettingsPage({
               );
             })}
             {inviteRows.length === 0 && <div className="empty-detail-state">填写私有访问码后刷新列表。</div>}
+          </div>
+        </section>
+
+        <section className="settings-card user-list-card">
+          <div className="settings-card-title">
+            <UserCircle size={18} />
+            <h2>用户管理</h2>
+          </div>
+          <div className="invite-admin-actions">
+            <button type="button" onClick={refreshUsers} disabled={!adminReady || userState.status === "loading"}>
+              刷新用户
+            </button>
+          </div>
+          {userState.message && <p className={`invite-admin-message ${userState.status}`}>{userState.message}</p>}
+          <div className="user-list">
+            {userRows.map((user) => {
+              const isSelf = user.id === authSession?.user.id;
+              const quotaValue = userQuotaDrafts[user.id] ?? String(user.maxWallets || "");
+              return (
+                <article className="user-row" key={user.id}>
+                  <div>
+                    <strong>{user.email || shortHash(user.id)}</strong>
+                    <span>
+                      {user.role === "admin" ? "管理员" : "普通用户"} · {formatSavedAt(user.createdAt)} 创建
+                    </span>
+                    <small>{user.workspaceCount} 个工作区 · {user.walletCount}/{user.maxWallets || "--"} 个钱包</small>
+                  </div>
+                  <em className={user.status}>{user.status === "active" ? "启用" : "禁用"}</em>
+                  <label>
+                    <span>钱包额度</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="500"
+                      value={quotaValue}
+                      onChange={(event) => setUserQuotaDrafts((drafts) => ({ ...drafts, [user.id]: event.target.value }))}
+                    />
+                  </label>
+                  <button type="button" onClick={() => saveUserQuota(user)} disabled={!adminReady || userState.status === "loading"}>
+                    保存额度
+                  </button>
+                  <button
+                    type="button"
+                    className={user.status === "active" ? "danger-action" : ""}
+                    onClick={() => toggleUserStatus(user)}
+                    disabled={!adminReady || userState.status === "loading" || (isSelf && user.status === "active")}
+                  >
+                    {user.status === "active" ? "禁用" : "启用"}
+                  </button>
+                </article>
+              );
+            })}
+            {userRows.length === 0 && <div className="empty-detail-state">登录管理员账号后刷新用户列表。</div>}
           </div>
         </section>
       </div>

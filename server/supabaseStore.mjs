@@ -91,6 +91,60 @@ export async function listInvites(env = process.env) {
   return rows.map(redactInvite);
 }
 
+export async function listAdminUsers(env = process.env) {
+  ensureSupabaseConfigured(env);
+  const profiles = await restSelect(env, "app_profiles", {
+    select: "id,email,role,status,max_wallets,daily_refresh_limit,daily_rescan_limit,created_at,updated_at",
+    order: "created_at.desc",
+    limit: "200",
+  });
+  const workspaces = await restSelect(env, "workspaces", {
+    select: "id,owner_id,updated_at",
+    limit: "2000",
+  });
+  const wallets = await restSelect(env, "wallets", {
+    is_active: "eq.true",
+    select: "workspace_id,address",
+    limit: "10000",
+  });
+  const stats = userStatsFromWorkspaceRows(workspaces, wallets);
+  return profiles.map((profile) => redactAdminUser(profile, stats.get(String(profile.id || ""))));
+}
+
+export async function updateAdminUser(input, actorUserId = "", env = process.env) {
+  ensureSupabaseConfigured(env);
+  const userId = String(input?.userId || input?.profileId || input?.id || "").trim();
+  if (!isUuid(userId)) throw userError("用户 ID 无效。", 400);
+  const [profile] = await restSelect(env, "app_profiles", {
+    id: `eq.${userId}`,
+    select: "id,email,role,status,max_wallets,daily_refresh_limit,daily_rescan_limit,created_at,updated_at",
+    limit: "1",
+  });
+  if (!profile) throw userError("用户不存在。", 404);
+
+  const patch = {};
+  if (Object.prototype.hasOwnProperty.call(input || {}, "status")) {
+    const status = input.status === "disabled" ? "disabled" : input.status === "active" ? "active" : "";
+    if (!status) throw userError("用户状态无效。", 400);
+    if (status === "disabled" && userId === actorUserId) throw userError("不能禁用当前登录的管理员账号。", 400);
+    if (status === "disabled" && profile.role === "admin") await assertCanDisableAdmin(env, userId);
+    patch.status = status;
+  }
+  if (Object.prototype.hasOwnProperty.call(input || {}, "maxWallets")) {
+    patch.max_wallets = clampInteger(input.maxWallets, 1, 500, Number(profile.max_wallets || 20));
+  }
+  if (Object.prototype.hasOwnProperty.call(input || {}, "dailyRefreshLimit")) {
+    patch.daily_refresh_limit = clampInteger(input.dailyRefreshLimit, 0, 5000, Number(profile.daily_refresh_limit || 50));
+  }
+  if (Object.prototype.hasOwnProperty.call(input || {}, "dailyRescanLimit")) {
+    patch.daily_rescan_limit = clampInteger(input.dailyRescanLimit, 0, 1000, Number(profile.daily_rescan_limit || 10));
+  }
+  if (!Object.keys(patch).length) throw userError("没有可更新的用户字段。", 400);
+
+  const [updated] = await restPatch(env, "app_profiles", { id: `eq.${userId}` }, patch);
+  return redactAdminUser(updated || { ...profile, ...patch });
+}
+
 export async function revokeInvite(input, env = process.env) {
   ensureSupabaseConfigured(env);
   const inviteId = String(input?.inviteId || input?.id || "").trim();
@@ -437,6 +491,17 @@ function assertWalletQuota(entries, profile) {
   }
 }
 
+async function assertCanDisableAdmin(env, userId) {
+  const activeAdmins = await restSelect(env, "app_profiles", {
+    role: "eq.admin",
+    status: "eq.active",
+    select: "id",
+    limit: "20",
+  });
+  const remainingAdmins = activeAdmins.filter((profile) => String(profile.id || "") !== userId);
+  if (!remainingAdmins.length) throw userError("不能禁用最后一个 active 管理员账号。", 400);
+}
+
 async function getAuthUser(token, env) {
   const user = await authFetch(env, "/auth/v1/user", {
     method: "GET",
@@ -704,6 +769,51 @@ function redactInvite(invite) {
     usedBy: invite.used_by || "",
     createdAt: invite.created_at || "",
   };
+}
+
+function redactAdminUser(profile, stats = {}) {
+  if (!profile) return null;
+  return {
+    id: String(profile.id || ""),
+    email: String(profile.email || ""),
+    role: profile.role === "admin" ? "admin" : "user",
+    status: profile.status === "disabled" ? "disabled" : "active",
+    maxWallets: Number(profile.max_wallets || 0),
+    dailyRefreshLimit: Number(profile.daily_refresh_limit || 0),
+    dailyRescanLimit: Number(profile.daily_rescan_limit || 0),
+    workspaceCount: Number(stats.workspaceCount || 0),
+    walletCount: Number(stats.walletCount || 0),
+    createdAt: profile.created_at || "",
+    updatedAt: profile.updated_at || "",
+  };
+}
+
+function userStatsFromWorkspaceRows(workspaces, wallets) {
+  const ownerByWorkspace = new Map();
+  const stats = new Map();
+  for (const workspace of Array.isArray(workspaces) ? workspaces : []) {
+    const ownerId = String(workspace.owner_id || "");
+    const workspaceId = String(workspace.id || "");
+    if (!ownerId || !workspaceId) continue;
+    ownerByWorkspace.set(workspaceId, ownerId);
+    const current = stats.get(ownerId) || { workspaceCount: 0, walletCount: 0 };
+    current.workspaceCount += 1;
+    stats.set(ownerId, current);
+  }
+  const seenWallets = new Set();
+  for (const wallet of Array.isArray(wallets) ? wallets : []) {
+    const workspaceId = String(wallet.workspace_id || "");
+    const ownerId = ownerByWorkspace.get(workspaceId);
+    const address = normalizeAddress(wallet.address || "");
+    if (!ownerId || !address) continue;
+    const key = `${ownerId}:${address}`;
+    if (seenWallets.has(key)) continue;
+    seenWallets.add(key);
+    const current = stats.get(ownerId) || { workspaceCount: 0, walletCount: 0 };
+    current.walletCount += 1;
+    stats.set(ownerId, current);
+  }
+  return stats;
 }
 
 function isUuid(value) {

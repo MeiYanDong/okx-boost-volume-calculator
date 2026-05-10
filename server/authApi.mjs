@@ -4,11 +4,13 @@ import {
   hasActiveAdminProfile,
   isAdminAuth,
   isSupabaseConfigured,
+  listAdminUsers,
   listInvites,
   redeemInvite,
   refreshAuthSession,
   revokeInvite,
   signInWithPassword,
+  updateAdminUser,
 } from "./supabaseStore.mjs";
 import { readJsonBody, requestUrl, sendJson, validateAccess } from "./proxy.mjs";
 
@@ -92,6 +94,20 @@ export async function handleAuthApi(request, response, config, env = process.env
     await validateAdminAccess(request, config, env);
     const invite = await revokeInvite(body, env);
     sendJson(response, 200, { ok: true, invite }, { "cache-control": "no-store" });
+    return;
+  }
+
+  if (action === "list-users") {
+    await validateAdminAccess(request, config, env);
+    const users = await listAdminUsers(env);
+    sendJson(response, 200, { ok: true, users }, { "cache-control": "no-store" });
+    return;
+  }
+
+  if (action === "update-user") {
+    const admin = await validateAdminAccess(request, config, env);
+    const user = await updateAdminUser(body, admin.userId, env);
+    sendJson(response, 200, { ok: true, user }, { "cache-control": "no-store" });
     return;
   }
 

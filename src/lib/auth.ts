@@ -36,6 +36,20 @@ export type CreatedInvite = {
   invite: AdminInvite;
 };
 
+export type AdminUserProfile = {
+  id: string;
+  email: string;
+  role: "admin" | "user";
+  status: "active" | "disabled";
+  maxWallets: number;
+  dailyRefreshLimit: number;
+  dailyRescanLimit: number;
+  workspaceCount: number;
+  walletCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export function readAuthSession(): AuthSession | null {
   const storage = safeStorage();
   if (!storage) return null;
@@ -147,6 +161,25 @@ export async function revokeAdminInvite(
   return payload.invite;
 }
 
+export async function listAdminUsers(auth: { accessPassword?: string; session?: AuthSession | null }): Promise<AdminUserProfile[]> {
+  const payload = await authRequest({ action: "list-users" }, adminHeaders(auth));
+  if (!isObject(payload) || !Array.isArray(payload.users)) throw new Error("用户列表响应不完整。");
+  return payload.users.filter(isAdminUserProfile);
+}
+
+export async function updateAdminUser(
+  params: {
+    userId: string;
+    status?: "active" | "disabled";
+    maxWallets?: number;
+  },
+  auth: { accessPassword?: string; session?: AuthSession | null },
+): Promise<AdminUserProfile> {
+  const payload = await authRequest({ action: "update-user", ...params }, adminHeaders(auth));
+  if (!isObject(payload) || !isAdminUserProfile(payload.user)) throw new Error("用户更新响应不完整。");
+  return payload.user;
+}
+
 async function authRequest(body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<unknown> {
   const response = await fetch("/api/auth", {
     method: "POST",
@@ -203,6 +236,23 @@ function isAdminInvite(value: unknown): value is AdminInvite {
     typeof value.usedAt === "string" &&
     typeof value.usedBy === "string" &&
     typeof value.createdAt === "string"
+  );
+}
+
+function isAdminUserProfile(value: unknown): value is AdminUserProfile {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.email === "string" &&
+    (value.role === "admin" || value.role === "user") &&
+    (value.status === "active" || value.status === "disabled") &&
+    typeof value.maxWallets === "number" &&
+    typeof value.dailyRefreshLimit === "number" &&
+    typeof value.dailyRescanLimit === "number" &&
+    typeof value.workspaceCount === "number" &&
+    typeof value.walletCount === "number" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
   );
 }
 
