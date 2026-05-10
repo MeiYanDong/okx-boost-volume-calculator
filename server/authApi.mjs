@@ -72,7 +72,7 @@ export async function handleAuthApi(request, response, config, env = process.env
   }
 
   if (action === "create-invite") {
-    const admin = await validateAdminAccess(request, config, env);
+    const admin = await validateAdminAccess(request, config, env, { allowCronSecret: true });
     const result = await createInvite(
       {
         ...body,
@@ -145,10 +145,10 @@ async function validateUserAccess(request, env) {
   return auth;
 }
 
-async function validateAdminAccess(request, config, env) {
+async function validateAdminAccess(request, config, env, options = {}) {
   const cronSecret = String(env.CRON_SECRET || "").trim();
   const authorization = headerValue(request.headers, "authorization");
-  if (cronSecret && authorization === `Bearer ${cronSecret}`) {
+  if (options.allowCronSecret && cronSecret && authorization === `Bearer ${cronSecret}`) {
     return { mode: "cron-secret", userId: "", bootstrap: false };
   }
 
@@ -157,7 +157,7 @@ async function validateAdminAccess(request, config, env) {
 
   const hasAdmin = await hasActiveAdminProfile(env);
   try {
-    validateAccess(request, config);
+    validateAccess(request, config, env);
     if (!hasAdmin) return { mode: "bootstrap-access", userId: "", bootstrap: true };
     const error = new Error("请先登录管理员账号。私有访问码只用于首个管理员初始化。");
     error.statusCode = 403;

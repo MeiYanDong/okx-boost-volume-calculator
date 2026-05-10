@@ -17,7 +17,7 @@ export async function handleArchiveApi(request, response, config, env = process.
       return;
     }
 
-    validateAccess(request, config);
+    validateAccess(request, config, env);
     const workspaceId = archiveWorkspaceId(request, url);
     const configured = isArchiveStoreConfigured(env);
     const archive = configured ? await getServerArchive(env, workspaceId) : null;
@@ -39,7 +39,7 @@ export async function handleArchiveApi(request, response, config, env = process.
       return;
     }
 
-    validateAccess(request, config);
+    validateAccess(request, config, env);
     if (!isArchiveStoreConfigured(env)) {
       sendJson(response, 503, { error: "Server archive store is not configured" }, { "cache-control": "no-store" });
       return;

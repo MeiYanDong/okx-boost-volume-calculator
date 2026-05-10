@@ -199,8 +199,15 @@ function envValue(env, primary, legacy) {
   return ((env[primary] || (legacy ? env[legacy] : "")) || "").trim();
 }
 
-export function validateAccess(request, config) {
-  if (!config.accessPassword) return;
+export function validateAccess(request, config, env = process.env) {
+  if (!config.accessPassword) {
+    if (isProductionRuntime(env)) {
+      const error = new Error("ACCESS_PASSWORD is not configured.");
+      error.statusCode = 503;
+      throw error;
+    }
+    return;
+  }
 
   if (hasDirectAccess(request, config)) return;
 
@@ -210,7 +217,14 @@ export function validateAccess(request, config) {
 }
 
 export async function validateServiceAccess(request, config, env = process.env) {
-  if (!config.accessPassword) return;
+  if (!config.accessPassword) {
+    if (isProductionRuntime(env)) {
+      const error = new Error("ACCESS_PASSWORD is not configured.");
+      error.statusCode = 503;
+      throw error;
+    }
+    return;
+  }
   if (hasDirectAccess(request, config)) return;
 
   const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
@@ -226,6 +240,10 @@ function hasDirectAccess(request, config) {
   const authorization = headerValue(request.headers, "authorization").replace(/^Bearer\s+/i, "");
   if (direct === config.accessPassword || authorization === config.accessPassword) return true;
   return false;
+}
+
+export function isProductionRuntime(env = process.env) {
+  return env.NODE_ENV === "production" || Boolean(env.VERCEL || env.VERCEL_ENV);
 }
 
 function headerValue(headers, name) {

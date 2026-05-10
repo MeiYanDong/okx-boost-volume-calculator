@@ -56,7 +56,8 @@ import {
 } from "./lib/auth";
 import type { CalculationResult, ParsedSwap, TokenGroup, TokenMeta } from "./lib/types";
 
-const SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
+const SAMPLE_WALLET = "";
+const LEGACY_SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
 const SERVER_MANAGED_EXPLORER_API_KEY = "__server__";
 const SERVER_MANAGED_ANKR_RPC_URL = "/api/ankr";
 const ACCESS_HEADER = "x-okx-boost-access";
@@ -452,7 +453,7 @@ export default function App() {
     if (authWalletQuotaExceeded) {
       setArchiveSyncState({
         status: "error",
-        message: `钱包数量超过账号额度：当前 ${parsedWallets.entries.length} 个，额度 ${authMaxWallets} 个。`,
+        message: `钱包数量超过账号上限：当前 ${parsedWallets.entries.length} 个，上限 ${authMaxWallets} 个。`,
       });
       return;
     }
@@ -783,6 +784,7 @@ export default function App() {
         mode === "redeem"
           ? await redeemInvite({ inviteCode: params.inviteCode || "", email: params.email, password: params.password })
           : await signInWithEmail(params.email, params.password);
+      resetSupabaseArchiveView();
       setAuthSession(session);
       setServerArchiveReady(false);
       setArchiveSyncState({ status: "loading", message: "正在读取 Supabase 云端归档..." });
@@ -794,6 +796,7 @@ export default function App() {
   }
 
   function signOut() {
+    resetSupabaseArchiveView();
     setAuthSession(null);
     writeAuthSession(null);
     setAuthState({ status: "idle", message: "已退出云端账号" });
@@ -1302,7 +1305,7 @@ function WalletManagementPage({
           <MetricLine label="待扫描" value={String(pendingCount)} />
           <MetricLine label="失败" value={String(failedCount)} />
           <MetricLine label="归档" value={archiveScopeLabel} />
-          <MetricLine label="钱包额度" value={walletQuotaLabel} />
+          <MetricLine label="钱包上限" value={walletQuotaLabel} />
         </div>
         <div className="wallet-management-actions">
           <button type="button" onClick={onScanAll} disabled={anyRunning || validCount === 0 || walletQuotaExceeded}>
@@ -1351,7 +1354,7 @@ function WalletManagementPage({
                 <ShieldCheck size={16} /> 云端账号
               </span>
               <strong>{authSession.user.email}</strong>
-              <small>已登录时，钱包列表和扫描归档保存到 Supabase 账号。额度 {walletQuotaLabel}。</small>
+              <small>已登录时，钱包列表和扫描归档保存到 Supabase 账号。钱包上限 {walletQuotaLabel}。</small>
             </div>
           ) : (
             <>
@@ -2397,15 +2400,15 @@ function SettingsPage({
     if (!adminReady || userState.status === "loading") return;
     const maxWallets = Number(userQuotaDrafts[row.id]);
     if (!Number.isInteger(maxWallets) || maxWallets < 1 || maxWallets > 500) {
-      setUserState({ status: "error", message: "钱包额度必须是 1 到 500 的整数。" });
+      setUserState({ status: "error", message: "钱包上限必须是 1 到 500 的整数。" });
       return;
     }
-    setUserState({ status: "loading", message: "正在更新钱包额度..." });
+    setUserState({ status: "loading", message: "正在更新钱包上限..." });
     try {
       const updated = await updateAdminUser({ userId: row.id, maxWallets }, adminAuth);
       setUserRows((rows) => rows.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
       setUserQuotaDrafts((drafts) => ({ ...drafts, [updated.id]: String(updated.maxWallets || "") }));
-      setUserState({ status: "ready", message: "钱包额度已更新。" });
+      setUserState({ status: "ready", message: "钱包上限已更新。" });
       void refreshUsers();
     } catch (caught) {
       setUserState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
@@ -2627,7 +2630,7 @@ function SettingsPage({
               </select>
             </label>
             <label>
-              <span>钱包额度</span>
+              <span>钱包上限</span>
               <input
                 type="number"
                 min="1"
@@ -2637,7 +2640,7 @@ function SettingsPage({
               />
             </label>
             <label>
-              <span>有效天数</span>
+              <span>邀请码有效期</span>
               <input
                 type="number"
                 min="1"
@@ -2681,7 +2684,7 @@ function SettingsPage({
                   <div>
                     <strong>{invite.email || "未绑定邮箱"}</strong>
                     <span>
-                      {formatSavedAt(invite.createdAt)} 创建 · {invite.maxWallets} 个钱包 ·{" "}
+                      {formatSavedAt(invite.createdAt)} 创建 · 上限 {invite.maxWallets} 个钱包 ·{" "}
                       {invite.role === "admin" ? "管理员" : "普通用户"}
                     </span>
                   </div>
@@ -2723,11 +2726,11 @@ function SettingsPage({
                     <span>
                       {user.role === "admin" ? "管理员" : "普通用户"} · {formatSavedAt(user.createdAt)} 创建
                     </span>
-                    <small>{user.workspaceCount} 个工作区 · {user.walletCount}/{user.maxWallets || "--"} 个钱包</small>
+                    <small>{user.workspaceCount} 个工作区 · 钱包 {user.walletCount}/{user.maxWallets || "--"}</small>
                   </div>
                   <em className={user.status}>{user.status === "active" ? "启用" : "禁用"}</em>
                   <label>
-                    <span>钱包额度</span>
+                    <span>钱包上限</span>
                     <input
                       type="number"
                       min="1"
@@ -2737,7 +2740,7 @@ function SettingsPage({
                     />
                   </label>
                   <button type="button" onClick={() => saveUserQuota(user)} disabled={!adminReady || userState.status === "loading"}>
-                    保存额度
+                    保存上限
                   </button>
                   <button
                     type="button"
@@ -3984,8 +3987,12 @@ function readPersistedUiState(): PersistedUiState {
   if (!storage) return {};
   try {
     const state = JSON.parse(storage.getItem(UI_STATE_KEY) || "{}") as PersistedUiState;
+    const walletsText = isOnlyLegacySampleWallet(state.walletsText) ? "" : state.walletsText;
+    const address = isOnlyLegacySampleWallet(state.address) ? "" : state.address;
     return {
       ...state,
+      walletsText,
+      address,
       walletFilter: isWalletFilter(state.walletFilter) ? state.walletFilter : "all",
       currentView: isAppView(state.currentView) ? state.currentView : "overview",
     };
@@ -3993,6 +4000,11 @@ function readPersistedUiState(): PersistedUiState {
     storage.removeItem(UI_STATE_KEY);
     return {};
   }
+}
+
+function isOnlyLegacySampleWallet(value: string | undefined): boolean {
+  const entries = parseWalletList(String(value || "")).entries;
+  return entries.length === 1 && entries[0].address === normalizeAddress(LEGACY_SAMPLE_WALLET);
 }
 
 function writePersistedUiState(state: PersistedUiState) {

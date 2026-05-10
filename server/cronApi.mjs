@@ -5,7 +5,7 @@ import {
   normalizeWorkspaceId,
   setServerArchive,
 } from "./archiveStore.mjs";
-import { requestUrl, sendFeishuText, sendJson, validateAccess } from "./proxy.mjs";
+import { isProductionRuntime, requestUrl, sendFeishuText, sendJson, validateAccess } from "./proxy.mjs";
 import {
   getSupabaseWorkspaceNotificationTarget,
   getSupabaseWorkspaceArchive,
@@ -39,48 +39,99 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
 
   for (const workspace of workspaces) {
     const workspaceId = workspace.workspaceId;
-    const result = await runDailyRefresh({
-      archive: workspace.archive,
-      config,
-      onProgress: (message) => {
-        console.log(`[daily-refresh][${workspace.provider}:${workspaceId}] ${message}`);
-      },
-    });
-
-    if (!dryRun) {
-      await saveCronWorkspaceArchive(env, workspace, result.updatedArchive);
-    }
-
-    const notificationTarget = await resolveNotificationTarget(env, workspace);
-    const shouldNotify = shouldNotifyForTarget(result, notificationTarget);
-    let notified = false;
-    let notificationProvider = "";
-    if (shouldNotify && !dryRun) {
-      await sendFeishuText(
-        `归档：${workspace.provider}\n数据空间：${workspaceId}\n${result.notificationText}`,
-        {
-          ...config,
-          feishuWebhookUrl: notificationTarget.webhookUrl,
-          feishuWebhookSecret: notificationTarget.webhookSecret,
+    try {
+      const result = await runDailyRefresh({
+        archive: workspace.archive,
+        config,
+        onProgress: (message) => {
+          console.log(`[daily-refresh][${workspace.provider}:${workspaceId}] ${message}`);
         },
-      );
-      notified = true;
-      notificationProvider = notificationTarget.provider;
-    }
+      });
 
-    results.push({ provider: workspace.provider, workspaceId, result, notified, notificationProvider, shouldNotify });
+      const operationErrors = [];
+      if (!dryRun) {
+        try {
+          await saveCronWorkspaceArchive(env, workspace, result.updatedArchive);
+        } catch (error) {
+          operationErrors.push(`归档保存失败：${errorMessage(error)}`);
+        }
+      }
+
+      const notificationTarget = await resolveNotificationTarget(env, workspace);
+      const shouldNotify = shouldNotifyForTarget(result, notificationTarget) || operationErrors.length > 0;
+      const notificationText = notificationTextForResult(result, operationErrors);
+      let notified = false;
+      let notificationProvider = "";
+      let notifyError = "";
+      if (shouldNotify && !dryRun && notificationTarget?.webhookUrl) {
+        try {
+          await sendFeishuText(`归档：${workspace.provider}\n数据空间：${workspaceId}\n${notificationText}`, {
+            ...config,
+            feishuWebhookUrl: notificationTarget.webhookUrl,
+            feishuWebhookSecret: notificationTarget.webhookSecret,
+          });
+          notified = true;
+          notificationProvider = notificationTarget.provider;
+        } catch (error) {
+          notifyError = `飞书发送失败：${errorMessage(error)}`;
+        }
+      }
+
+      results.push({
+        provider: workspace.provider,
+        workspaceId,
+        result,
+        notified,
+        notificationProvider,
+        shouldNotify,
+        error: operationErrors.join("\n"),
+        notifyError,
+        notificationText,
+      });
+    } catch (error) {
+      const message = errorMessage(error);
+      let notified = false;
+      let notificationProvider = "";
+      let notifyError = "";
+      const notificationTarget = await resolveNotificationTarget(env, workspace).catch(() => null);
+      const notificationText = `OKX Boost 自动刷新执行失败\n错误：${message}`;
+      if (!dryRun && notificationTarget?.webhookUrl) {
+        try {
+          await sendFeishuText(`归档：${workspace.provider}\n数据空间：${workspaceId}\n${notificationText}`, {
+            ...config,
+            feishuWebhookUrl: notificationTarget.webhookUrl,
+            feishuWebhookSecret: notificationTarget.webhookSecret,
+          });
+          notified = true;
+          notificationProvider = notificationTarget.provider;
+        } catch (caught) {
+          notifyError = `飞书发送失败：${errorMessage(caught)}`;
+        }
+      }
+      results.push({
+        provider: workspace.provider,
+        workspaceId,
+        result: null,
+        notified,
+        notificationProvider,
+        shouldNotify: Boolean(notificationTarget?.webhookUrl),
+        error: message,
+        notifyError,
+        notificationText,
+      });
+    }
   }
 
   const summary = results.reduce(
     (acc, item) => ({
-      walletCount: acc.walletCount + item.result.summary.walletCount,
-      succeeded: acc.succeeded + item.result.summary.succeeded,
-      failed: acc.failed + item.result.summary.failed,
-      skipped: acc.skipped + item.result.summary.skipped,
+      walletCount: acc.walletCount + resultSummary(item).walletCount,
+      succeeded: acc.succeeded + resultSummary(item).succeeded,
+      failed: acc.failed + resultSummary(item).failed,
+      skipped: acc.skipped + resultSummary(item).skipped,
     }),
     { walletCount: 0, succeeded: 0, failed: 0, skipped: 0 },
   );
-  const firstResult = results[0]?.result;
+  const firstResult = results.find((item) => item.result)?.result;
 
   sendJson(
     response,
@@ -99,19 +150,36 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
         notified: item.notified,
         notificationProvider: item.notificationProvider || undefined,
         shouldNotify: item.shouldNotify,
-        summary: item.result.summary,
-        forecast: item.result.forecastRows.map((row) => ({
+        error: item.error || undefined,
+        notifyError: item.notifyError || undefined,
+        summary: resultSummary(item),
+        forecast: (item.result?.forecastRows || []).map((row) => ({
           snapshotDate: row.snapshotDate,
           atRiskWallets: row.atRiskWallets,
           archivedWallets: row.archivedWallets,
           worstGap: row.worstGap,
           expiredBoostVolume: row.expiredBoostVolume,
         })),
-        notificationPreview: dryRun ? item.result.notificationText : undefined,
+        notificationPreview: dryRun ? item.notificationText : undefined,
       })),
     },
     { "cache-control": "no-store" },
   );
+}
+
+function resultSummary(item) {
+  if (item.result?.summary) return item.result.summary;
+  return { walletCount: 0, succeeded: 0, failed: item.error ? 1 : 0, skipped: 0 };
+}
+
+function notificationTextForResult(result, operationErrors) {
+  return [result.notificationText, operationErrors.length ? ["运行错误：", ...operationErrors].join("\n") : ""]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function resolveCronWorkspaces(env, requestedWorkspace, config) {
@@ -125,6 +193,8 @@ async function resolveCronWorkspaces(env, requestedWorkspace, config) {
       if (resolved) targets.push({ provider: "supabase", workspaceId: resolved.workspaceId, archive: resolved.archive });
     }
   }
+
+  if (requested && targets.length) return targets;
 
   if (config.upstashConfigured) {
     const ids = requested ? [normalizeWorkspaceId(requested)] : await listArchiveWorkspaces(env);
@@ -174,15 +244,15 @@ function validateCronAccess(request, config, env) {
   if (cronSecret && authorization === `Bearer ${cronSecret}`) return;
 
   if (config.accessPassword) {
-    validateAccess(request, config);
+    validateAccess(request, config, env);
     return;
   }
 
-  if (!cronSecret) return;
+  if (!cronSecret && !isProductionRuntime(env)) return;
 
   {
-    const error = new Error("Cron authorization is missing or invalid.");
-    error.statusCode = 401;
+    const error = new Error(cronSecret ? "Cron authorization is missing or invalid." : "CRON_SECRET is not configured.");
+    error.statusCode = cronSecret ? 401 : 503;
     throw error;
   }
 }

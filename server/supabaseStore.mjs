@@ -264,6 +264,7 @@ export async function getSupabaseWorkspaceArchive(env, workspaceId) {
   ensureSupabaseConfigured(env);
   const workspace = await getWorkspaceById(env, workspaceId);
   if (!workspace) return null;
+  await getActiveProfileForUser(env, workspace.owner_id);
   const archive = await buildArchiveFromWorkspace(env, workspace);
   return { workspaceId: workspace.id, archive };
 }
@@ -584,7 +585,7 @@ async function getActiveProfileForUser(env, userId) {
 function assertWalletQuota(entries, profile) {
   const maxWallets = Number(profile?.max_wallets || 0);
   if (maxWallets > 0 && entries.length > maxWallets) {
-    throw userError(`钱包数量超过账号额度：当前 ${entries.length} 个，额度 ${maxWallets} 个。`, 403);
+    throw userError(`钱包数量超过账号上限：当前 ${entries.length} 个，上限 ${maxWallets} 个。`, 403);
   }
 }
 
