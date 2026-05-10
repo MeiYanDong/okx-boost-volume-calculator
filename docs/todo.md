@@ -49,7 +49,7 @@
   子 todo：[S21 账号级管理员权限](./todos/2026-05-10-account-admin-permissions.md)
 - [x] S22 账号额度与扫描访问闭环加固
   子 todo：[S22 账号额度与扫描访问闭环加固](./todos/2026-05-10-quota-auth-audit.md)
-- [ ] S23 管理员用户管理
+- [x] S23 管理员用户管理
   子 todo：[S23 管理员用户管理](./todos/2026-05-10-admin-user-management.md)
 
 ## 维护规则
