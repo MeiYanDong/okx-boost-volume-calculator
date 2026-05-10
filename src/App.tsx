@@ -12,6 +12,8 @@ import {
   Gauge,
   Home,
   LockKeyhole,
+  LogIn,
+  LogOut,
   MoreHorizontal,
   PencilLine,
   RefreshCcw,
@@ -29,6 +31,18 @@ import { BSC_CHAIN, isAddress, normalizeAddress } from "./lib/chains";
 import { buildUtcWindow, calculateBoostVolume, latestSelectableUtcDate } from "./lib/calculator";
 import { formatNumber, formatUsd, shortHash } from "./lib/format";
 import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPassword } from "./lib/serverAccess";
+import {
+  authHeaders,
+  readAuthSession,
+  redeemInvite,
+  refreshAuthSession,
+  shouldRefreshSession,
+  signInWithEmail,
+  validateAuthSession,
+  writeAuthSession,
+  type AuthMode,
+  type AuthSession,
+} from "./lib/auth";
 import type { CalculationResult, ParsedSwap, TokenGroup, TokenMeta } from "./lib/types";
 
 const SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
@@ -66,6 +80,10 @@ type NotifyState = {
 };
 type ArchiveSyncState = {
   status: "idle" | "loading" | "saving" | "synced" | "error";
+  message: string;
+};
+type AuthRequestState = {
+  status: "idle" | "loading" | "ready" | "error";
   message: string;
 };
 type ScopedBonusRules = {
@@ -207,6 +225,8 @@ export default function App() {
   const [tenDayTarget, setTenDayTarget] = useState(initialUiState.tenDayTarget || DEFAULT_TEN_DAY_TARGET);
   const [dataSpace, setDataSpace] = useState(normalizeDataSpace(initialUiState.dataSpace || DEFAULT_DATA_SPACE));
   const [accessPassword, setAccessPassword] = useState(readServerAccessPassword);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(readAuthSession);
+  const [authState, setAuthState] = useState<AuthRequestState>({ status: "idle", message: "" });
   const [boostOverrides, setBoostOverrides] = useState(initialUiState.boostOverrides || "");
   const [selectedWallet, setSelectedWallet] = useState("");
   const [walletFilter, setWalletFilter] = useState<WalletFilter>(initialUiState.walletFilter || "all");
@@ -256,6 +276,7 @@ export default function App() {
   );
   const selectedRecord = appliedRecords.find((record) => record.address === selectedWallet) || null;
   const viewMeta = viewMetaFor(currentView, targetTotal);
+  const canUseServerArchive = Boolean(authSession || accessPassword.trim());
   const primaryAction = useMemo(
     () => buildPrimaryAction(appliedRecords, portfolio, anyRunning),
     [appliedRecords, portfolio, anyRunning],
@@ -278,18 +299,56 @@ export default function App() {
   }, [accessPassword]);
 
   useEffect(() => {
+    writeAuthSession(authSession);
+  }, [authSession]);
+
+  useEffect(() => {
+    const session = readAuthSession();
+    if (!session) return;
+    const storedSession = session;
+    let cancelled = false;
+    async function restoreSession() {
+      try {
+        const nextSession = shouldRefreshSession(storedSession)
+          ? await refreshAuthSession(storedSession.refreshToken)
+          : storedSession;
+        const valid = shouldRefreshSession(storedSession) ? true : await validateAuthSession(nextSession);
+        if (!valid) throw new Error("登录状态已失效。");
+        if (!cancelled) {
+          setAuthSession(nextSession);
+          setAuthState({ status: "ready", message: "已连接 Supabase 云端归档" });
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthSession(null);
+          setAuthState({ status: "error", message: "登录已过期，请重新登录" });
+        }
+      }
+    }
+    void restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     setRecords((current) => syncWalletRecords(current, parsedWallets.entries, endDate));
   }, [walletsKey, walletNamesKey, endDate, parsedWallets.entries]);
 
   useEffect(() => {
     let cancelled = false;
     async function loadServerArchive() {
+      if (!canUseServerArchive) {
+        setArchiveSyncState({ status: "idle", message: "登录或填写私有访问码后同步云端归档" });
+        setServerArchiveReady(true);
+        return;
+      }
       setServerArchiveReady(false);
       setArchiveSyncState({ status: "loading", message: "正在读取服务端归档..." });
       try {
         const response = await fetch("/api/archive", {
           method: "GET",
-          headers: archiveAccessHeaders(accessPassword, dataSpace),
+          headers: archiveAccessHeaders(accessPassword, dataSpace, {}, authSession),
         });
         if (!response.ok) {
           const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -298,14 +357,14 @@ export default function App() {
         const payload = (await response.json().catch(() => ({}))) as { archive?: ServerArchivePayload | null };
         const archive = payload.archive;
         if (!archive || (!archive.walletsText && !archive.records?.length)) {
-          setArchiveSyncState({ status: "synced", message: `数据空间 ${dataSpace} 暂无服务端归档` });
+          setArchiveSyncState({ status: "synced", message: authSession ? "云端暂无归档，将自动保存当前数据" : `数据空间 ${dataSpace} 暂无服务端归档` });
           return;
         }
         if (cancelled) return;
         hydrateServerArchive(archive);
-        setArchiveSyncState({ status: "synced", message: `已恢复数据空间 ${dataSpace}` });
+        setArchiveSyncState({ status: "synced", message: authSession ? "已恢复 Supabase 云端归档" : `已恢复数据空间 ${dataSpace}` });
       } catch {
-        const message = "服务端归档未同步，请检查私有访问码或稍后重试";
+        const message = authSession ? "云端归档未同步，请重新登录或稍后重试" : "服务端归档未同步，请检查私有访问码或稍后重试";
         setArchiveSyncState({ status: "error", message });
       } finally {
         if (!cancelled) setServerArchiveReady(true);
@@ -315,10 +374,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [accessPassword, dataSpace]);
+  }, [accessPassword, dataSpace, authSession?.accessToken, authSession?.user.id, canUseServerArchive]);
 
   useEffect(() => {
     if (!serverArchiveReady || anyRunning) return;
+    if (!canUseServerArchive) {
+      setArchiveSyncState({ status: "idle", message: "登录或填写私有访问码后同步云端归档" });
+      return;
+    }
     if (shouldSkipServerArchiveSync(walletsText, records, scanHistory)) {
       setArchiveSyncState({ status: "idle", message: "添加钱包或完成扫描后同步服务端归档" });
       return;
@@ -334,16 +397,17 @@ export default function App() {
         records,
         scanHistory,
         accessPassword,
+        authSession,
       }).then((result) => {
         setArchiveSyncState(
           result.ok
-            ? { status: "synced", message: `已同步到数据空间 ${dataSpace}` }
+            ? { status: "synced", message: authSession ? "已同步到 Supabase 云端" : `已同步到数据空间 ${dataSpace}` }
             : { status: "error", message: result.error || "服务端归档同步失败" },
         );
       });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, dataSpace, records, scanHistory, accessPassword]);
+  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, dataSpace, records, scanHistory, accessPassword, authSession, canUseServerArchive]);
 
   useEffect(() => {
     if (selectedWallet && !parsedWallets.addresses.includes(selectedWallet)) {
@@ -627,12 +691,45 @@ export default function App() {
     }
   }
 
+  async function submitAuth(mode: AuthMode, params: { email: string; password: string; inviteCode?: string }) {
+    if (authState.status === "loading") return;
+    setAuthState({ status: "loading", message: mode === "redeem" ? "正在兑换邀请码..." : "正在登录..." });
+    try {
+      const session =
+        mode === "redeem"
+          ? await redeemInvite({ inviteCode: params.inviteCode || "", email: params.email, password: params.password })
+          : await signInWithEmail(params.email, params.password);
+      setAuthSession(session);
+      setServerArchiveReady(false);
+      setArchiveSyncState({ status: "loading", message: "正在读取 Supabase 云端归档..." });
+      setAuthState({ status: "ready", message: "已连接 Supabase 云端归档" });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setAuthState({ status: "error", message });
+    }
+  }
+
+  function signOut() {
+    setAuthSession(null);
+    writeAuthSession(null);
+    setAuthState({ status: "idle", message: "已退出云端账号" });
+    setServerArchiveReady(false);
+    setArchiveSyncState({ status: "loading", message: "正在切回私有归档..." });
+  }
+
   return (
     <main className="app-frame">
       <Sidebar currentView={currentView} onViewChange={changeView} />
 
       <section className="main-workspace">
-        <Topbar title={viewMeta.title} subtitle={viewMeta.subtitle} />
+        <Topbar
+          title={viewMeta.title}
+          subtitle={viewMeta.subtitle}
+          authSession={authSession}
+          authState={authState}
+          onAuthSubmit={submitAuth}
+          onSignOut={signOut}
+        />
 
         {currentView !== "wallets" && (
           <Toolbar
@@ -688,6 +785,7 @@ export default function App() {
           <WalletManagementPage
             walletsText={walletsText}
             accessPassword={accessPassword}
+            authSession={authSession}
             dataSpace={dataSpace}
             archiveSyncState={archiveSyncState}
             records={appliedRecords}
@@ -840,7 +938,21 @@ function Sidebar({
   );
 }
 
-function Topbar({ title, subtitle }: { title: string; subtitle: string }) {
+function Topbar({
+  title,
+  subtitle,
+  authSession,
+  authState,
+  onAuthSubmit,
+  onSignOut,
+}: {
+  title: string;
+  subtitle: string;
+  authSession: AuthSession | null;
+  authState: AuthRequestState;
+  onAuthSubmit: (mode: AuthMode, params: { email: string; password: string; inviteCode?: string }) => void;
+  onSignOut: () => void;
+}) {
   return (
     <header className="topbar">
       <div>
@@ -848,13 +960,94 @@ function Topbar({ title, subtitle }: { title: string; subtitle: string }) {
         <span>{subtitle}</span>
       </div>
       <div className="topbar-actions">
-        <div className="user-chip">
-          <UserCircle size={25} />
-          <strong>MYANDONG</strong>
-          <ChevronDown size={15} />
-        </div>
+        <AccountMenu
+          authSession={authSession}
+          authState={authState}
+          onAuthSubmit={onAuthSubmit}
+          onSignOut={onSignOut}
+        />
       </div>
     </header>
+  );
+}
+
+function AccountMenu({
+  authSession,
+  authState,
+  onAuthSubmit,
+  onSignOut,
+}: {
+  authSession: AuthSession | null;
+  authState: AuthRequestState;
+  onAuthSubmit: (mode: AuthMode, params: { email: string; password: string; inviteCode?: string }) => void;
+  onSignOut: () => void;
+}) {
+  const [mode, setMode] = useState<AuthMode>("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const busy = authState.status === "loading";
+
+  return (
+    <details className="account-menu">
+      <summary className="user-chip">
+        <UserCircle size={25} />
+        <strong>{authSession?.user.email || "本机模式"}</strong>
+        <ChevronDown size={15} />
+      </summary>
+      <div className="account-popover">
+        {authSession ? (
+          <>
+            <div className="account-status-card">
+              <span>云端归档</span>
+              <strong>{authSession.user.email}</strong>
+              <small>当前数据会保存到 Supabase 账号，不再依赖数据空间码。</small>
+            </div>
+            <button type="button" className="account-submit secondary" onClick={onSignOut}>
+              <LogOut size={15} />
+              退出登录
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="account-tabs" role="tablist" aria-label="账号操作">
+              <button type="button" className={mode === "signin" ? "active" : ""} onClick={() => setMode("signin")}>
+                登录
+              </button>
+              <button type="button" className={mode === "redeem" ? "active" : ""} onClick={() => setMode("redeem")}>
+                邀请注册
+              </button>
+            </div>
+            <div className="account-form">
+              {mode === "redeem" && (
+                <label>
+                  <span>邀请码</span>
+                  <input value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} autoComplete="one-time-code" />
+                </label>
+              )}
+              <label>
+                <span>邮箱</span>
+                <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" />
+              </label>
+              <label>
+                <span>密码</span>
+                <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} />
+              </label>
+              <button
+                type="button"
+                className="account-submit"
+                disabled={busy}
+                onClick={() => onAuthSubmit(mode, { email, password, inviteCode })}
+              >
+                <LogIn size={15} />
+                {busy ? "处理中" : mode === "redeem" ? "注册并登录" : "登录"}
+              </button>
+            </div>
+          </>
+        )}
+        {authState.message && <p className={`account-message ${authState.status}`}>{authState.message}</p>}
+      </div>
+    </details>
   );
 }
 
@@ -961,6 +1154,7 @@ function Toolbar({
 function WalletManagementPage({
   walletsText,
   accessPassword,
+  authSession,
   dataSpace,
   archiveSyncState,
   records,
@@ -978,6 +1172,7 @@ function WalletManagementPage({
 }: {
   walletsText: string;
   accessPassword: string;
+  authSession: AuthSession | null;
   dataSpace: string;
   archiveSyncState: ArchiveSyncState;
   records: WalletArchiveRecord[];
@@ -998,7 +1193,8 @@ function WalletManagementPage({
   const pendingCount = records.filter((record) => !record.result && record.state !== "running" && record.state !== "error").length;
   const walletLineCount = walletsText.split(/\n+/).filter((line) => line.trim()).length;
   const archivedPercent = validCount > 0 ? Math.round((archivedWallets / validCount) * 100) : 0;
-  const accessCodeState = accessPassword ? "已填写" : "未填写";
+  const accessCodeState = authSession ? "云端账号" : accessPassword ? "已填写" : "未填写";
+  const archiveScopeLabel = authSession ? "Supabase" : dataSpace || DEFAULT_DATA_SPACE;
 
   return (
     <section className="work-page wallet-management-page">
@@ -1012,7 +1208,7 @@ function WalletManagementPage({
           <MetricLine label="已归档" value={`${archivedWallets}/${validCount || 0}`} />
           <MetricLine label="待扫描" value={String(pendingCount)} />
           <MetricLine label="失败" value={String(failedCount)} />
-          <MetricLine label="数据空间" value={dataSpace || DEFAULT_DATA_SPACE} />
+          <MetricLine label="归档" value={archiveScopeLabel} />
         </div>
         <div className="wallet-management-actions">
           <button type="button" onClick={onScanAll} disabled={anyRunning || validCount === 0}>
@@ -1049,33 +1245,45 @@ function WalletManagementPage({
             <small>支持一行一个地址，也支持「名称 地址」。</small>
           </label>
 
-          <label className="access-code-panel">
-            <span>
-              <LockKeyhole size={16} /> 私有访问码
-            </span>
-            <input
-              type="password"
-              value={accessPassword}
-              onChange={(event) => onAccessPasswordChange(event.target.value)}
-              placeholder="私人部署需要时填写"
-              autoComplete="current-password"
-            />
-            <small>只保存在本机浏览器。</small>
-          </label>
+          {authSession ? (
+            <div className="access-code-panel">
+              <span>
+                <ShieldCheck size={16} /> 云端账号
+              </span>
+              <strong>{authSession.user.email}</strong>
+              <small>已登录时，钱包列表和扫描归档保存到 Supabase 账号。</small>
+            </div>
+          ) : (
+            <>
+              <label className="access-code-panel">
+                <span>
+                  <LockKeyhole size={16} /> 私有访问码
+                </span>
+                <input
+                  type="password"
+                  value={accessPassword}
+                  onChange={(event) => onAccessPasswordChange(event.target.value)}
+                  placeholder="私人部署需要时填写"
+                  autoComplete="current-password"
+                />
+                <small>只保存在本机浏览器。</small>
+              </label>
 
-          <label className="access-code-panel">
-            <span>
-              <ShieldCheck size={16} /> 数据空间码
-            </span>
-            <input
-              type="text"
-              value={dataSpace}
-              onChange={(event) => onDataSpaceChange(event.target.value)}
-              placeholder={DEFAULT_DATA_SPACE}
-              autoComplete="off"
-            />
-            <small>不同用户使用不同数据空间码；换设备时填写同一个码即可恢复同一份归档。</small>
-          </label>
+              <label className="access-code-panel">
+                <span>
+                  <ShieldCheck size={16} /> 数据空间码
+                </span>
+                <input
+                  type="text"
+                  value={dataSpace}
+                  onChange={(event) => onDataSpaceChange(event.target.value)}
+                  placeholder={DEFAULT_DATA_SPACE}
+                  autoComplete="off"
+                />
+                <small>未登录时，不同用户使用不同数据空间码；换设备时填写同一个码即可恢复同一份归档。</small>
+              </label>
+            </>
+          )}
         </section>
 
         <aside className="wallet-management-side">
@@ -3066,6 +3274,7 @@ async function syncServerArchive(params: {
   records: WalletArchiveRecord[];
   scanHistory: ScanHistoryRecord[];
   accessPassword: string;
+  authSession: AuthSession | null;
 }): Promise<{ ok: boolean; error?: string }> {
   const payload: ServerArchivePayload = {
     workspaceId: params.dataSpace,
@@ -3089,7 +3298,7 @@ async function syncServerArchive(params: {
   try {
     const response = await fetch("/api/archive", {
       method: "POST",
-      headers: archiveAccessHeaders(params.accessPassword, params.dataSpace, { "content-type": "application/json" }),
+      headers: archiveAccessHeaders(params.accessPassword, params.dataSpace, { "content-type": "application/json" }, params.authSession),
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -3107,7 +3316,9 @@ function archiveAccessHeaders(
   accessPassword: string,
   dataSpace: string,
   headers: Record<string, string> = {},
+  authSession: AuthSession | null = null,
 ): Record<string, string> {
+  if (authSession) return authHeaders(authSession, headers);
   const password = accessPassword.trim();
   const workspace = normalizeDataSpace(dataSpace);
   const baseHeaders = password ? { ...headers, [ACCESS_HEADER]: password } : serverAccessHeaders(headers);

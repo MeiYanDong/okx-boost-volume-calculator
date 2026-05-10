@@ -43,6 +43,7 @@ OKX Boost 的计算对新手不友好，主要有几个坑：
 - 本地归档，扫过的钱包不会重复全量扫描
 - 服务端归档，Vercel 重新部署后仍能恢复钱包和结果
 - 数据空间隔离，不同用户不会互相覆盖钱包和结果
+- 邀请制账号登录，登录后按 Supabase 账号保存云端归档
 - 单钱包增量刷新，只补扫新区块
 - 强制重扫，用于重建异常归档
 - 批量钱包 3 路有限并行刷新
@@ -92,7 +93,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 2. 安装依赖并启动本地网页。
 3. 配置服务端数据源，不要把密钥暴露到前端页面，也不要提交密钥文件。
 4. 优先配置 Ankr 钱包索引用来发现交易；配置 BNB Chain RPC 用来解析交易。
-5. 如果我要跨部署保存数据，请配置 Vercel Upstash Redis，或在本地说明只能使用浏览器本地归档。
+5. 如果我要跨部署保存数据，请优先配置 Supabase 邀请制账号；旧版本也可以继续用 Vercel Upstash Redis。
 6. 如果我要飞书提醒，请配置飞书自定义机器人 Webhook；如果机器人开启签名，也配置签名密钥。
 7. 打开本地页面，导入我的钱包地址。
 8. 选择快照日期。
@@ -127,14 +128,16 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 1. 检查 Vercel 项目是否已关联正确仓库。
 2. 在 Vercel 环境变量里配置 Ankr、BNB Chain RPC、访问密码等服务端变量。
 3. 配置 Vercel Upstash Redis，用来保存钱包列表、扫描结果、加成规则和自动刷新状态。
-4. 配置 CRON_SECRET，用来保护每日自动刷新接口。
-5. 如果我要飞书提醒，在 Vercel 环境变量里配置 FEISHU_WEBHOOK_URL；如果机器人开启签名，再配置 FEISHU_WEBHOOK_SECRET。
-6. 部署生产版本。
-7. 验证页面能打开。
-8. 验证不带访问密码时 API 会拒绝。
-9. 验证带访问密码时 Ankr 钱包索引和 RPC 能正常返回。
-10. 验证 /api/cron/daily-refresh?dryRun=1 能返回自动刷新预览，但不真实发送飞书。
-11. 告诉我最终链接、是否启用访问保护、是否完成线上烟测。
+4. 如果我要多用户账号隔离，请配置 Supabase：SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、SUPABASE_SECRET_KEY。
+5. 配置 CRON_SECRET，用来保护每日自动刷新接口。
+6. 如果我要飞书提醒，在 Vercel 环境变量里配置 FEISHU_WEBHOOK_URL；如果机器人开启签名，再配置 FEISHU_WEBHOOK_SECRET。
+7. 部署生产版本。
+8. 验证页面能打开。
+9. 验证不带访问密码时 API 会拒绝。
+10. 验证带访问密码时 Ankr 钱包索引和 RPC 能正常返回。
+11. 验证 Supabase 邀请码注册、登录、刷新页面恢复归档。
+12. 验证 /api/cron/daily-refresh?dryRun=1 能返回自动刷新预览，但不真实发送飞书。
+13. 告诉我最终链接、是否启用访问保护、是否完成线上烟测。
 ```
 
 私人部署不要公开发给不可信的人。否则别人会消耗你的 Ankr、Chainstack 或 Explorer 额度。
@@ -164,7 +167,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 
 ## 自动归档和定时提醒怎么理解
 
-本地运行时，浏览器会保存一份本地归档；私人部署到 Vercel 后，页面还会把钱包列表、扫描结果、目标线和代币加成规则同步到服务端 Upstash Redis。
+本地运行时，浏览器会保存一份本地归档；私人部署到 Vercel 后，推荐用 Supabase 账号保存云端归档。旧版 Upstash Redis 数据空间仍然兼容。
 
 这样更新代码或重新部署 Vercel 后，生产链接不变，数据也不会因为重新部署而消失。
 
@@ -173,6 +176,17 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 自动提醒只在“有风险”或“自动刷新失败”时发送，不发送无意义的安全日报。
 
 ## 多个用户怎么区分数据
+
+推荐方式是邀请制账号：
+
+1. 管理员先创建邀请码。
+2. 用户在页面右上角选择“邀请注册”。
+3. 注册登录后，钱包列表、扫描结果、目标线和加成规则都会保存到自己的 Supabase 账号工作区。
+4. 换设备时用同一个邮箱密码登录，就能恢复自己的归档。
+
+这种方式比手填数据空间码更稳，不容易因为用户忘记空间码导致数据找不到。
+
+旧版兼容方式如下：
 
 `私有访问码` 只负责保护 API 额度，不负责区分用户数据。
 

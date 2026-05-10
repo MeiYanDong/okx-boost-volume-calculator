@@ -41,6 +41,8 @@
   子 todo：[S17 归档数据空间隔离](./todos/2026-05-10-archive-workspaces.md)
 - [x] S18 Supabase 邀请制基础设施
   子 todo：[S18 Supabase 邀请制基础设施](./todos/2026-05-10-supabase-invite-foundation.md)
+- [x] S19 邀请制登录与 Supabase 云端归档
+  子 todo：[S19 邀请制登录与 Supabase 云端归档](./todos/2026-05-10-supabase-auth-archive.md)
 
 ## 维护规则
 

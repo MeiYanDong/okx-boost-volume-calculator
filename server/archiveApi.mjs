@@ -1,32 +1,52 @@
 import { getServerArchive, isArchiveStoreConfigured, normalizeWorkspaceId, setServerArchive } from "./archiveStore.mjs";
 import { readJsonBody, requestUrl, sendJson, validateAccess } from "./proxy.mjs";
+import { getSupabaseUserFromRequest, getUserArchive, saveUserArchive } from "./supabaseStore.mjs";
 
 const maxWalletsTextLength = 20_000;
 const maxBonusRulesLength = 50_000;
 const maxRecords = 200;
 
 export async function handleArchiveApi(request, response, config, env = process.env) {
-  validateAccess(request, config);
   const url = requestUrl(request);
+  const auth = await getSupabaseUserFromRequest(request, env);
 
   if (request.method === "GET") {
+    if (auth) {
+      const { workspaceId, archive } = await getUserArchive(env, auth.user);
+      sendJson(response, 200, { configured: true, provider: "supabase", workspaceId, archive }, { "cache-control": "no-store" });
+      return;
+    }
+
+    validateAccess(request, config);
     const workspaceId = archiveWorkspaceId(request, url);
     const configured = isArchiveStoreConfigured(env);
     const archive = configured ? await getServerArchive(env, workspaceId) : null;
-    sendJson(response, 200, { configured, workspaceId, archive }, { "cache-control": "no-store" });
+    sendJson(response, 200, { configured, provider: "upstash", workspaceId, archive }, { "cache-control": "no-store" });
     return;
   }
 
   if (request.method === "POST") {
+    const body = await readJsonBody(request);
+    const archive = sanitizeArchive(body);
+    if (auth) {
+      const saved = await saveUserArchive(env, auth.user, archive);
+      sendJson(
+        response,
+        200,
+        { ok: true, provider: "supabase", workspaceId: saved.workspaceId, archive: saved.archive },
+        { "cache-control": "no-store" },
+      );
+      return;
+    }
+
+    validateAccess(request, config);
     if (!isArchiveStoreConfigured(env)) {
       sendJson(response, 503, { error: "Server archive store is not configured" }, { "cache-control": "no-store" });
       return;
     }
-    const body = await readJsonBody(request);
     const workspaceId = archiveWorkspaceId(request, url, body);
-    const archive = sanitizeArchive(body);
     const saved = await setServerArchive(archive, env, workspaceId);
-    sendJson(response, 200, { ok: true, workspaceId, archive: saved }, { "cache-control": "no-store" });
+    sendJson(response, 200, { ok: true, provider: "upstash", workspaceId, archive: saved }, { "cache-control": "no-store" });
     return;
   }
 

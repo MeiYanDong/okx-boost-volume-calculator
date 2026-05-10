@@ -16,6 +16,7 @@ import {
   warnLegacyEnv,
 } from "./server/proxy.mjs";
 import { handleArchiveApi } from "./server/archiveApi.mjs";
+import { handleAuthApi } from "./server/authApi.mjs";
 import { handleDailyRefreshCron } from "./server/cronApi.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -65,6 +66,11 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/archive") {
       await handleArchiveApi(request, response, config, env);
+      return;
+    }
+
+    if (url.pathname === "/api/auth") {
+      await handleAuthApi(request, response, config, env);
       return;
     }
 
