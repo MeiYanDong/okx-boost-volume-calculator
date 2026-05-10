@@ -304,6 +304,19 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.user-chip em {
+  padding: 3px 7px;
+  border: 1px solid rgba(186, 255, 26, 0.34);
+  border-radius: 999px;
+  background: var(--lime-soft);
+  color: var(--lime);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .account-popover {
   position: absolute;
   top: calc(100% + 10px);
@@ -2219,7 +2232,7 @@ tr:last-child td {
 
 .invite-form-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 130px 130px;
+  grid-template-columns: minmax(220px, 1fr) 140px 130px 130px;
   gap: 12px;
 }
 
@@ -2234,7 +2247,8 @@ tr:last-child td {
   font-weight: 820;
 }
 
-.invite-form-grid input {
+.invite-form-grid input,
+.invite-form-grid select {
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 8px;

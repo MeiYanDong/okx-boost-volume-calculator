@@ -1,6 +1,8 @@
 import {
   createInvite,
   getSupabaseUserFromRequest,
+  hasActiveAdminProfile,
+  isAdminAuth,
   isSupabaseConfigured,
   listInvites,
   redeemInvite,
@@ -28,6 +30,9 @@ export async function handleAuthApi(request, response, config, env = process.env
           ? {
               id: auth.user.id,
               email: auth.user.email || "",
+              role: auth.profile?.role || "user",
+              status: auth.profile?.status || "active",
+              maxWallets: Number(auth.profile?.max_wallets || 0),
             }
           : null,
       },
@@ -63,21 +68,28 @@ export async function handleAuthApi(request, response, config, env = process.env
   }
 
   if (action === "create-invite") {
-    validateAdminAccess(request, config, env);
-    const result = await createInvite(body, env);
+    const admin = await validateAdminAccess(request, config, env);
+    const result = await createInvite(
+      {
+        ...body,
+        role: admin.bootstrap ? "admin" : body.role,
+        createdBy: admin.userId,
+      },
+      env,
+    );
     sendJson(response, 200, { ok: true, ...result }, { "cache-control": "no-store" });
     return;
   }
 
   if (action === "list-invites") {
-    validateAdminAccess(request, config, env);
+    await validateAdminAccess(request, config, env);
     const invites = await listInvites(env);
     sendJson(response, 200, { ok: true, invites }, { "cache-control": "no-store" });
     return;
   }
 
   if (action === "revoke-invite") {
-    validateAdminAccess(request, config, env);
+    await validateAdminAccess(request, config, env);
     const invite = await revokeInvite(body, env);
     sendJson(response, 200, { ok: true, invite }, { "cache-control": "no-store" });
     return;
@@ -86,14 +98,24 @@ export async function handleAuthApi(request, response, config, env = process.env
   sendJson(response, 400, { error: "Unknown auth action" }, { "cache-control": "no-store" });
 }
 
-function validateAdminAccess(request, config, env) {
+async function validateAdminAccess(request, config, env) {
+  const adminAuth = await isAdminAuth(request, env);
+  if (adminAuth) return { mode: "admin-session", userId: adminAuth.user.id, bootstrap: false };
+
+  const cronSecret = String(env.CRON_SECRET || "").trim();
+  const authorization = headerValue(request.headers, "authorization");
+  if (cronSecret && authorization === `Bearer ${cronSecret}`) {
+    return { mode: "cron-secret", userId: "", bootstrap: false };
+  }
+
+  const hasAdmin = await hasActiveAdminProfile(env);
   try {
     validateAccess(request, config);
-    return;
+    if (!hasAdmin) return { mode: "bootstrap-access", userId: "", bootstrap: true };
+    const error = new Error("请先登录管理员账号。私有访问码只用于首个管理员初始化。");
+    error.statusCode = 403;
+    throw error;
   } catch (error) {
-    const cronSecret = String(env.CRON_SECRET || "").trim();
-    const authorization = headerValue(request.headers, "authorization");
-    if (cronSecret && authorization === `Bearer ${cronSecret}`) return;
     throw error;
   }
 }

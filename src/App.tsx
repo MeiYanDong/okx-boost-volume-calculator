@@ -37,6 +37,7 @@ import {
   listAdminInvites,
   readAuthSession,
   redeemInvite,
+  refreshAuthProfile,
   refreshAuthSession,
   revokeAdminInvite,
   shouldRefreshSession,
@@ -321,10 +322,13 @@ export default function App() {
         const nextSession = shouldRefreshSession(storedSession)
           ? await refreshAuthSession(storedSession.refreshToken)
           : storedSession;
-        const valid = shouldRefreshSession(storedSession) ? true : await validateAuthSession(nextSession);
-        if (!valid) throw new Error("登录状态已失效。");
+        const profiledSession = shouldRefreshSession(storedSession)
+          ? nextSession
+          : await refreshAuthProfile(nextSession);
+        const valid = profiledSession ? true : await validateAuthSession(nextSession);
+        if (!valid || !profiledSession) throw new Error("登录状态已失效。");
         if (!cancelled) {
-          setAuthSession(nextSession);
+          setAuthSession(profiledSession);
           setAuthState({ status: "ready", message: "已连接 Supabase 云端归档" });
         }
       } catch {
@@ -833,6 +837,7 @@ export default function App() {
             portfolio={portfolio}
             scanHistoryCount={scanHistoryRows.length}
             accessPassword={accessPassword}
+            authSession={authSession}
             onTenDayTargetChange={setTenDayTarget}
             onAccessPasswordChange={setAccessPassword}
           />
@@ -1004,6 +1009,7 @@ function AccountMenu({
       <summary className="user-chip">
         <UserCircle size={25} />
         <strong>{authSession?.user.email || "本机模式"}</strong>
+        {authSession?.user.role === "admin" && <em>Admin</em>}
         <ChevronDown size={15} />
       </summary>
       <div className="account-popover">
@@ -1012,7 +1018,9 @@ function AccountMenu({
             <div className="account-status-card">
               <span>云端归档</span>
               <strong>{authSession.user.email}</strong>
-              <small>当前数据会保存到 Supabase 账号，不再依赖数据空间码。</small>
+              <small>
+                {authSession.user.role === "admin" ? "管理员账号，可管理邀请码。" : "当前数据会保存到 Supabase 账号，不再依赖数据空间码。"}
+              </small>
             </div>
             <button type="button" className="account-submit secondary" onClick={onSignOut}>
               <LogOut size={15} />
@@ -2111,6 +2119,7 @@ function SettingsPage({
   portfolio,
   scanHistoryCount,
   accessPassword,
+  authSession,
   onTenDayTargetChange,
   onAccessPasswordChange,
 }: {
@@ -2119,24 +2128,29 @@ function SettingsPage({
   portfolio: PortfolioSummary;
   scanHistoryCount: number;
   accessPassword: string;
+  authSession: AuthSession | null;
   onTenDayTargetChange: (value: string) => void;
   onAccessPasswordChange: (value: string) => void;
 }) {
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"admin" | "user">("user");
   const [inviteMaxWallets, setInviteMaxWallets] = useState("20");
   const [inviteExpiresInDays, setInviteExpiresInDays] = useState("14");
   const [inviteRows, setInviteRows] = useState<AdminInvite[]>([]);
   const [inviteState, setInviteState] = useState<InviteAdminState>({ status: "idle", message: "" });
-  const adminReady = Boolean(accessPassword.trim());
+  const isAdminSession = authSession?.user.role === "admin" && authSession.user.status !== "disabled";
+  const adminAuth = { session: isAdminSession ? authSession : null, accessPassword };
+  const adminReady = isAdminSession || Boolean(accessPassword.trim());
+  const adminModeLabel = isAdminSession ? "管理员账号" : "初始化访问码";
 
   async function refreshInvites() {
     if (!adminReady) {
-      setInviteState({ status: "error", message: "请先填写私有访问码。" });
+      setInviteState({ status: "error", message: "请先登录管理员账号，或在首个管理员初始化时填写私有访问码。" });
       return;
     }
     setInviteState({ status: "loading", message: "正在读取邀请码..." });
     try {
-      const rows = await listAdminInvites(accessPassword);
+      const rows = await listAdminInvites(adminAuth);
       setInviteRows(rows);
       setInviteState({ status: "ready", message: `已读取 ${rows.length} 个邀请码。` });
     } catch (caught) {
@@ -2146,7 +2160,7 @@ function SettingsPage({
 
   async function createInvite() {
     if (!adminReady || inviteState.status === "loading") {
-      setInviteState({ status: "error", message: "请先填写私有访问码。" });
+      setInviteState({ status: "error", message: "请先登录管理员账号，或在首个管理员初始化时填写私有访问码。" });
       return;
     }
     setInviteState({ status: "loading", message: "正在生成邀请码..." });
@@ -2154,15 +2168,20 @@ function SettingsPage({
       const created = await createAdminInvite(
         {
           email: inviteEmail,
+          role: inviteRole,
           maxWallets: Number(inviteMaxWallets) || 20,
           expiresInDays: Number(inviteExpiresInDays) || 14,
         },
-        accessPassword,
+        adminAuth,
       );
       setInviteEmail("");
-      const rows = await listAdminInvites(accessPassword).catch(() => inviteRows);
+      const rows = await listAdminInvites(adminAuth).catch(() => inviteRows);
       setInviteRows(rows);
-      setInviteState({ status: "ready", message: "邀请码已生成，只展示这一次。", code: created.code });
+      setInviteState({
+        status: "ready",
+        message: `${created.invite.role === "admin" ? "管理员" : "用户"}邀请码已生成，只展示这一次。`,
+        code: created.code,
+      });
     } catch (caught) {
       setInviteState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
     }
@@ -2173,7 +2192,7 @@ function SettingsPage({
     if (!window.confirm("确认撤销这个未使用的邀请码？")) return;
     setInviteState({ status: "loading", message: "正在撤销邀请码..." });
     try {
-      const revoked = await revokeAdminInvite(id, accessPassword);
+      const revoked = await revokeAdminInvite(id, adminAuth);
       setInviteRows((rows) => rows.map((row) => (row.id === revoked.id ? revoked : row)));
       setInviteState({ status: "ready", message: "邀请码已撤销。" });
     } catch (caught) {
@@ -2234,15 +2253,18 @@ function SettingsPage({
           </div>
 
           <label className="target-input-control">
-            <span>管理员私有访问码</span>
+            <span>管理员权限</span>
             <input
               type="password"
               value={accessPassword}
               onChange={(event) => onAccessPasswordChange(event.target.value)}
-              placeholder="填写后可创建和撤销邀请码"
+              placeholder={isAdminSession ? "已登录管理员账号，可留空" : "首个管理员初始化时填写"}
               autoComplete="current-password"
+              disabled={isAdminSession}
             />
-            <small>只保存在本机浏览器，用于调用管理员接口。</small>
+            <small>
+              当前使用{adminModeLabel}。私有访问码只用于首个管理员初始化；之后请用管理员账号管理邀请。
+            </small>
           </label>
 
           <div className="invite-form-grid">
@@ -2255,6 +2277,13 @@ function SettingsPage({
                 placeholder="可留空"
                 autoComplete="off"
               />
+            </label>
+            <label>
+              <span>账号角色</span>
+              <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as "admin" | "user")}>
+                <option value="user">普通用户</option>
+                <option value="admin">管理员</option>
+              </select>
             </label>
             <label>
               <span>钱包额度</span>
@@ -2311,7 +2340,8 @@ function SettingsPage({
                   <div>
                     <strong>{invite.email || "未绑定邮箱"}</strong>
                     <span>
-                      {formatSavedAt(invite.createdAt)} 创建 · {invite.maxWallets} 个钱包
+                      {formatSavedAt(invite.createdAt)} 创建 · {invite.maxWallets} 个钱包 ·{" "}
+                      {invite.role === "admin" ? "管理员" : "普通用户"}
                     </span>
                   </div>
                   <em className={status.tone}>{status.label}</em>

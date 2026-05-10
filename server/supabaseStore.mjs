@@ -21,7 +21,8 @@ export async function getSupabaseUserFromRequest(request, env = process.env) {
   const token = getBearerToken(request);
   if (!token || !isSupabaseConfigured(env)) return null;
   const user = await getAuthUser(token, env);
-  return user ? { token, user } : null;
+  const profile = user?.id ? await getProfileByUserId(env, user.id) : null;
+  return user ? { token, user, profile } : null;
 }
 
 export async function signInWithPassword(input, env = process.env) {
@@ -35,7 +36,7 @@ export async function signInWithPassword(input, env = process.env) {
     apiKey: "publishable",
     body: { email, password },
   });
-  return authPayloadToSession(payload);
+  return enrichSessionWithProfile(env, authPayloadToSession(payload));
 }
 
 export async function refreshAuthSession(refreshToken, env = process.env) {
@@ -46,7 +47,7 @@ export async function refreshAuthSession(refreshToken, env = process.env) {
     apiKey: "publishable",
     body: { refresh_token: token },
   });
-  return authPayloadToSession(payload);
+  return enrichSessionWithProfile(env, authPayloadToSession(payload));
 }
 
 export async function createInvite(input, env = process.env) {
@@ -66,6 +67,7 @@ export async function createInvite(input, env = process.env) {
       daily_refresh_limit: clampInteger(input?.dailyRefreshLimit, 0, 1000, 50),
       daily_rescan_limit: clampInteger(input?.dailyRescanLimit, 0, 1000, 10),
       expires_at: expiresAt,
+      created_by: isUuid(input?.createdBy) ? input.createdBy : null,
     },
   ]);
 
@@ -97,6 +99,23 @@ export async function revokeInvite(input, env = process.env) {
   );
   if (!invite) throw userError("邀请码不存在或已被使用。", 404);
   return redactInvite(invite);
+}
+
+export async function hasActiveAdminProfile(env = process.env) {
+  if (!isSupabaseConfigured(env)) return false;
+  const rows = await restSelect(env, "app_profiles", {
+    role: "eq.admin",
+    status: "eq.active",
+    select: "id",
+    limit: "1",
+  });
+  return rows.length > 0;
+}
+
+export async function isAdminAuth(request, env = process.env) {
+  const auth = await getSupabaseUserFromRequest(request, env);
+  const profile = auth?.profile || null;
+  return Boolean(profile?.role === "admin" && profile?.status === "active") ? auth : null;
 }
 
 export async function redeemInvite(input, env = process.env) {
@@ -379,6 +398,15 @@ async function upsertNotificationSettings(env, workspaceId) {
   ], "workspace_id");
 }
 
+async function getProfileByUserId(env, userId) {
+  const [profile] = await restSelect(env, "app_profiles", {
+    id: `eq.${userId}`,
+    select: "id,email,role,status,max_wallets,daily_refresh_limit,daily_rescan_limit,created_at,updated_at",
+    limit: "1",
+  });
+  return profile || null;
+}
+
 async function getAuthUser(token, env) {
   const user = await authFetch(env, "/auth/v1/user", {
     method: "GET",
@@ -518,6 +546,19 @@ function authPayloadToSession(payload) {
     user: {
       id: payload.user.id,
       email: payload.user.email || "",
+    },
+  };
+}
+
+async function enrichSessionWithProfile(env, session) {
+  const profile = await getProfileByUserId(env, session.user.id);
+  return {
+    ...session,
+    user: {
+      ...session.user,
+      role: profile?.role || "user",
+      status: profile?.status || "active",
+      maxWallets: Number(profile?.max_wallets || 0),
     },
   };
 }

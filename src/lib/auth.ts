@@ -4,6 +4,9 @@ const ACCESS_HEADER = "x-okx-boost-access";
 export type AuthUser = {
   id: string;
   email: string;
+  role?: "admin" | "user";
+  status?: "active" | "disabled";
+  maxWallets?: number;
 };
 
 export type AuthSession = {
@@ -93,22 +96,35 @@ export async function validateAuthSession(session: AuthSession): Promise<boolean
   return Boolean(payload.user?.id);
 }
 
+export async function refreshAuthProfile(session: AuthSession): Promise<AuthSession | null> {
+  const response = await fetch("/api/auth?action=me", {
+    method: "GET",
+    headers: authHeaders(session),
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json().catch(() => ({}))) as { user?: unknown };
+  if (!isAuthUser(payload.user)) return null;
+  return { ...session, user: payload.user };
+}
+
 export async function createAdminInvite(
   params: {
     email: string;
+    role: "admin" | "user";
     maxWallets: number;
     expiresInDays: number;
   },
-  accessPassword: string,
+  auth: { accessPassword?: string; session?: AuthSession | null },
 ): Promise<CreatedInvite> {
   const payload = await authRequest(
     {
       action: "create-invite",
       email: params.email,
+      role: params.role,
       maxWallets: params.maxWallets,
       expiresInDays: params.expiresInDays,
     },
-    adminHeaders(accessPassword),
+    adminHeaders(auth),
   );
   if (!isObject(payload) || typeof payload.code !== "string" || !isAdminInvite(payload.invite)) {
     throw new Error("创建邀请码响应不完整。");
@@ -116,14 +132,17 @@ export async function createAdminInvite(
   return { code: payload.code, invite: payload.invite };
 }
 
-export async function listAdminInvites(accessPassword: string): Promise<AdminInvite[]> {
-  const payload = await authRequest({ action: "list-invites" }, adminHeaders(accessPassword));
+export async function listAdminInvites(auth: { accessPassword?: string; session?: AuthSession | null }): Promise<AdminInvite[]> {
+  const payload = await authRequest({ action: "list-invites" }, adminHeaders(auth));
   if (!isObject(payload) || !Array.isArray(payload.invites)) throw new Error("邀请码列表响应不完整。");
   return payload.invites.filter(isAdminInvite);
 }
 
-export async function revokeAdminInvite(inviteId: string, accessPassword: string): Promise<AdminInvite> {
-  const payload = await authRequest({ action: "revoke-invite", inviteId }, adminHeaders(accessPassword));
+export async function revokeAdminInvite(
+  inviteId: string,
+  auth: { accessPassword?: string; session?: AuthSession | null },
+): Promise<AdminInvite> {
+  const payload = await authRequest({ action: "revoke-invite", inviteId }, adminHeaders(auth));
   if (!isObject(payload) || !isAdminInvite(payload.invite)) throw new Error("撤销邀请码响应不完整。");
   return payload.invite;
 }
@@ -139,8 +158,9 @@ async function authRequest(body: Record<string, unknown>, headers: Record<string
   return payload;
 }
 
-function adminHeaders(accessPassword: string): Record<string, string> {
-  const password = accessPassword.trim();
+function adminHeaders(auth: { accessPassword?: string; session?: AuthSession | null }): Record<string, string> {
+  if (auth.session?.accessToken) return authHeaders(auth.session);
+  const password = String(auth.accessPassword || "").trim();
   return password ? { [ACCESS_HEADER]: password } : {};
 }
 
@@ -151,13 +171,22 @@ function parseSessionPayload(payload: unknown): AuthSession {
 }
 
 function isAuthSession(value: unknown): value is AuthSession {
-  if (!isObject(value) || !isObject(value.user)) return false;
+  if (!isObject(value) || !isAuthUser(value.user)) return false;
   return (
     typeof value.accessToken === "string" &&
     typeof value.refreshToken === "string" &&
-    typeof value.expiresAt === "number" &&
-    typeof value.user.id === "string" &&
-    typeof value.user.email === "string"
+    typeof value.expiresAt === "number"
+  );
+}
+
+function isAuthUser(value: unknown): value is AuthUser {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.email === "string" &&
+    (value.role === undefined || value.role === "admin" || value.role === "user") &&
+    (value.status === undefined || value.status === "active" || value.status === "disabled") &&
+    (value.maxWallets === undefined || typeof value.maxWallets === "number")
   );
 }
 
