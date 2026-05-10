@@ -57,6 +57,8 @@
   子 todo：[S25 取消全局飞书 Webhook](./todos/2026-05-10-personal-feishu-only.md)
 - [x] S26 飞书真实数据测试发送
   子 todo：[S26 飞书真实数据测试发送](./todos/2026-05-10-real-data-feishu-test.md)
+- [x] S27 账号归档隔离加固
+  子 todo：[S27 账号归档隔离加固](./todos/2026-05-10-account-archive-isolation.md)
 
 ## 维护规则
 

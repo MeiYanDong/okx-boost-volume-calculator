@@ -252,6 +252,7 @@ export default function App() {
   const [notifyState, setNotifyState] = useState<NotifyState>({ status: "idle", message: "" });
   const [archiveSyncState, setArchiveSyncState] = useState<ArchiveSyncState>({ status: "idle", message: "服务端归档待同步" });
   const [serverArchiveReady, setServerArchiveReady] = useState(false);
+  const [serverArchiveContext, setServerArchiveContext] = useState("");
   const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
     syncWalletRecords([], parseWalletList(initialWalletsText).entries, initialEndDate),
   );
@@ -293,6 +294,7 @@ export default function App() {
   const selectedRecord = appliedRecords.find((record) => record.address === selectedWallet) || null;
   const viewMeta = viewMetaFor(currentView, targetTotal);
   const canUseServerArchive = Boolean(authSession || accessPassword.trim());
+  const archiveContextKey = authSession ? `auth:${authSession.user.id}` : canUseServerArchive ? `workspace:${dataSpace}` : "local";
   const authMaxWallets = Number(authSession?.user.maxWallets || 0);
   const authWalletQuotaExceeded = Boolean(authSession && authMaxWallets > 0 && parsedWallets.entries.length > authMaxWallets);
   const primaryAction = useMemo(
@@ -301,6 +303,7 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (authSession) return;
     writePersistedUiState({
       walletsText,
       endDate,
@@ -310,7 +313,7 @@ export default function App() {
       walletFilter,
       currentView,
     });
-  }, [walletsText, endDate, boostOverrides, tenDayTarget, dataSpace, walletFilter, currentView]);
+  }, [authSession, walletsText, endDate, boostOverrides, tenDayTarget, dataSpace, walletFilter, currentView]);
 
   useEffect(() => {
     writeServerAccessPassword(accessPassword);
@@ -386,13 +389,16 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const contextKey = archiveContextKey;
     async function loadServerArchive() {
       if (!canUseServerArchive) {
         setArchiveSyncState({ status: "idle", message: "登录或填写私有访问码后同步云端归档" });
+        setServerArchiveContext(contextKey);
         setServerArchiveReady(true);
         return;
       }
       setServerArchiveReady(false);
+      setServerArchiveContext("");
       setArchiveSyncState({ status: "loading", message: "正在读取服务端归档..." });
       try {
         const response = await fetch("/api/archive", {
@@ -406,7 +412,12 @@ export default function App() {
         const payload = (await response.json().catch(() => ({}))) as { archive?: ServerArchivePayload | null };
         const archive = payload.archive;
         if (!archive || (!archive.walletsText && !archive.records?.length)) {
-          setArchiveSyncState({ status: "synced", message: authSession ? "云端暂无归档，将自动保存当前数据" : `数据空间 ${dataSpace} 暂无服务端归档` });
+          if (authSession) {
+            resetSupabaseArchiveView();
+            setArchiveSyncState({ status: "synced", message: "当前账号云端暂无归档，请先添加钱包" });
+          } else {
+            setArchiveSyncState({ status: "synced", message: `数据空间 ${dataSpace} 暂无服务端归档` });
+          }
           return;
         }
         if (cancelled) return;
@@ -416,17 +427,20 @@ export default function App() {
         const message = authSession ? "云端归档未同步，请重新登录或稍后重试" : "服务端归档未同步，请检查私有访问码或稍后重试";
         setArchiveSyncState({ status: "error", message });
       } finally {
-        if (!cancelled) setServerArchiveReady(true);
+        if (!cancelled) {
+          setServerArchiveContext(contextKey);
+          setServerArchiveReady(true);
+        }
       }
     }
     void loadServerArchive();
     return () => {
       cancelled = true;
     };
-  }, [accessPassword, dataSpace, authSession?.accessToken, authSession?.user.id, canUseServerArchive]);
+  }, [accessPassword, dataSpace, authSession?.accessToken, authSession?.user.id, canUseServerArchive, archiveContextKey]);
 
   useEffect(() => {
-    if (!serverArchiveReady || anyRunning) return;
+    if (!serverArchiveReady || serverArchiveContext !== archiveContextKey || anyRunning) return;
     if (!canUseServerArchive) {
       setArchiveSyncState({ status: "idle", message: "登录或填写私有访问码后同步云端归档" });
       return;
@@ -463,7 +477,7 @@ export default function App() {
       });
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [serverArchiveReady, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, dataSpace, records, scanHistory, accessPassword, authSession, canUseServerArchive, authWalletQuotaExceeded, authMaxWallets, parsedWallets.entries.length]);
+  }, [serverArchiveReady, serverArchiveContext, archiveContextKey, anyRunning, walletsText, endDate, tenDayTarget, boostOverrides, dataSpace, records, scanHistory, accessPassword, authSession, canUseServerArchive, authWalletQuotaExceeded, authMaxWallets, parsedWallets.entries.length]);
 
   useEffect(() => {
     if (selectedWallet && !parsedWallets.addresses.includes(selectedWallet)) {
@@ -569,14 +583,14 @@ export default function App() {
   function appendScanHistory(record: ScanHistoryRecord) {
     setScanHistory((current) => {
       const next = [record, ...current.filter((item) => item.id !== record.id)].slice(0, MAX_SCAN_HISTORY_RECORDS);
-      writePersistedScanHistory(next);
+      if (!authSession) writePersistedScanHistory(next);
       return next;
     });
   }
 
   async function scanWallet(address: string, options: ScanWalletOptions = {}) {
     const normalizedAddress = normalizeAddress(address);
-    const cached = options.forceRefresh ? null : readPersistedResult(normalizedAddress, endDate);
+    const cached = authSession || options.forceRefresh ? null : readPersistedResult(normalizedAddress, endDate);
     if (cached && !options.refresh) {
       patchRecord(normalizedAddress, {
         state: "done",
@@ -630,7 +644,7 @@ export default function App() {
         },
       });
       const savedAt = new Date().toISOString();
-      writePersistedResult(normalizedAddress, endDate, computed, savedAt);
+      if (!authSession) writePersistedResult(normalizedAddress, endDate, computed, savedAt);
       appendScanHistory({
         id: `${normalizedAddress}:${endDate}:${startedAt}:${mode}`,
         address: normalizedAddress,
@@ -698,7 +712,7 @@ export default function App() {
     const nextWalletsText = mergeWalletTexts({
       localText: walletsText,
       serverText: archive.walletsText || "",
-      preserveLocal: hasPersistedWalletState,
+      preserveLocal: !authSession && hasPersistedWalletState,
     });
     const nextRecords = hydrateRecordsFromServerArchive(archive, nextWalletsText, nextEndDate);
 
@@ -709,12 +723,22 @@ export default function App() {
     if (archive.scanHistory) {
       const history = archive.scanHistory.filter(isScanHistoryRecord).slice(0, MAX_SCAN_HISTORY_RECORDS);
       setScanHistory(history);
-      writePersistedScanHistory(history);
+      if (!authSession) writePersistedScanHistory(history);
     }
     setRecords(nextRecords);
     for (const record of nextRecords) {
-      if (record.result && record.savedAt) writePersistedResult(record.address, nextEndDate, record.result, record.savedAt);
+      if (!authSession && record.result && record.savedAt) writePersistedResult(record.address, nextEndDate, record.result, record.savedAt);
     }
+  }
+
+  function resetSupabaseArchiveView() {
+    setWalletsText("");
+    setEndDate(maxSnapshotDate);
+    setTenDayTarget(DEFAULT_TEN_DAY_TARGET);
+    setBoostOverrides("");
+    setSelectedWallet("");
+    setScanHistory([]);
+    setRecords([]);
   }
 
   function changeView(view: AppView) {
@@ -753,6 +777,8 @@ export default function App() {
     if (authState.status === "loading") return;
     setAuthState({ status: "loading", message: mode === "redeem" ? "正在兑换邀请码..." : "正在登录..." });
     try {
+      setServerArchiveReady(false);
+      setServerArchiveContext("");
       const session =
         mode === "redeem"
           ? await redeemInvite({ inviteCode: params.inviteCode || "", email: params.email, password: params.password })
@@ -3858,6 +3884,7 @@ function shouldSkipServerArchiveSync(
   const addresses = parseWalletList(walletsText).addresses;
   const onlyDefaultSampleWallet = addresses.length === 1 && addresses[0] === normalizeAddress(SAMPLE_WALLET);
   const hasArchivedData = records.some((record) => record.result || record.savedAt);
+  if (addresses.length === 0 && !hasArchivedData && scanHistory.length === 0) return true;
   return onlyDefaultSampleWallet && !hasArchivedData && scanHistory.length === 0;
 }
 
