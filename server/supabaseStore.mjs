@@ -273,6 +273,84 @@ export async function saveSupabaseWorkspaceArchive(env, workspaceId, archive) {
   return saveWorkspaceArchive(env, workspaceId, archive);
 }
 
+export async function getUserNotificationSettings(env, user) {
+  ensureSupabaseConfigured(env);
+  await getActiveProfileForUser(env, user.id);
+  const workspace = await getOrCreateDefaultWorkspace(env, user.id);
+  const settings = await getOrCreateNotificationSettings(env, workspace.id);
+  return redactNotificationSettings(settings);
+}
+
+export async function updateUserNotificationSettings(env, user, input) {
+  ensureSupabaseConfigured(env);
+  await getActiveProfileForUser(env, user.id);
+  const workspace = await getOrCreateDefaultWorkspace(env, user.id);
+  const current = await getOrCreateNotificationSettings(env, workspace.id);
+  const patch = {};
+
+  if (Object.prototype.hasOwnProperty.call(input || {}, "feishuEnabled")) {
+    patch.feishu_enabled = Boolean(input.feishuEnabled);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(input || {}, "notifyFutureDays")) {
+    patch.notify_future_days = clampInteger(input.notifyFutureDays, 0, 30, Number(current.notify_future_days || 3));
+  }
+
+  if (input?.clearFeishuWebhook === true) {
+    patch.feishu_webhook = "";
+    patch.feishu_secret = "";
+    patch.feishu_enabled = false;
+  } else if (Object.prototype.hasOwnProperty.call(input || {}, "feishuWebhook")) {
+    const webhook = String(input.feishuWebhook || "").trim();
+    if (webhook) {
+      validateFeishuWebhookForStore(webhook);
+      patch.feishu_webhook = webhook;
+    }
+  }
+
+  if (input?.clearFeishuSecret === true) {
+    patch.feishu_secret = "";
+  } else if (Object.prototype.hasOwnProperty.call(input || {}, "feishuSecret")) {
+    const secret = String(input.feishuSecret || "").trim();
+    if (secret) {
+      if (secret.length > 256) throw userError("飞书签名密钥过长。", 400);
+      patch.feishu_secret = secret;
+    }
+  }
+
+  const nextWebhook = Object.prototype.hasOwnProperty.call(patch, "feishu_webhook") ? patch.feishu_webhook : current.feishu_webhook;
+  const nextEnabled = Object.prototype.hasOwnProperty.call(patch, "feishu_enabled")
+    ? patch.feishu_enabled
+    : Boolean(current.feishu_enabled);
+  if (nextEnabled && !String(nextWebhook || "").trim()) throw userError("请先保存飞书机器人 Webhook。", 400);
+  if (!Object.keys(patch).length) return redactNotificationSettings(current);
+
+  const [updated] = await restPatch(env, "notification_settings", { workspace_id: `eq.${workspace.id}` }, patch);
+  return redactNotificationSettings(updated || { ...current, ...patch });
+}
+
+export async function getUserNotificationTarget(env, user) {
+  ensureSupabaseConfigured(env);
+  await getActiveProfileForUser(env, user.id);
+  const workspace = await getOrCreateDefaultWorkspace(env, user.id);
+  const settings = await getOrCreateNotificationSettings(env, workspace.id);
+  return notificationTargetFromSettings(settings);
+}
+
+export async function getSupabaseWorkspaceNotificationTarget(env, workspaceId) {
+  ensureSupabaseConfigured(env);
+  const workspace = await getWorkspaceById(env, workspaceId);
+  if (!workspace) return null;
+  const profile = await getActiveProfileForUser(env, workspace.owner_id);
+  const settings = await getOrCreateNotificationSettings(env, workspace.id);
+  return {
+    ...notificationTargetFromSettings(settings),
+    workspaceId: workspace.id,
+    ownerId: workspace.owner_id,
+    ownerEmail: String(profile.email || ""),
+  };
+}
+
 async function saveWorkspaceArchive(env, workspaceId, archive) {
   const workspace = await getWorkspaceById(env, workspaceId);
   if (!workspace) throw userError("Supabase workspace not found", 404);
@@ -417,7 +495,9 @@ async function getOrCreateDefaultWorkspace(env, userId) {
     limit: "1",
   });
   if (existing) return existing;
-  return createDefaultWorkspace(env, userId, {});
+  const workspace = await createDefaultWorkspace(env, userId, {});
+  await upsertNotificationSettings(env, workspace.id);
+  return workspace;
 }
 
 async function getWorkspaceById(env, workspaceId) {
@@ -466,6 +546,23 @@ async function upsertNotificationSettings(env, workspaceId) {
       notify_future_days: 3,
     },
   ], "workspace_id");
+}
+
+async function getOrCreateNotificationSettings(env, workspaceId) {
+  const [existing] = await restSelect(env, "notification_settings", {
+    workspace_id: `eq.${workspaceId}`,
+    select: "workspace_id,feishu_webhook,feishu_secret,feishu_enabled,notify_future_days,created_at,updated_at",
+    limit: "1",
+  });
+  if (existing) return existing;
+  const [created] = await restUpsert(env, "notification_settings", [
+    {
+      workspace_id: workspaceId,
+      feishu_enabled: false,
+      notify_future_days: 3,
+    },
+  ], "workspace_id");
+  return created;
 }
 
 async function getProfileByUserId(env, userId) {
@@ -786,6 +883,54 @@ function redactAdminUser(profile, stats = {}) {
     createdAt: profile.created_at || "",
     updatedAt: profile.updated_at || "",
   };
+}
+
+function redactNotificationSettings(settings) {
+  const webhook = String(settings?.feishu_webhook || "").trim();
+  const secret = String(settings?.feishu_secret || "").trim();
+  return {
+    feishuEnabled: Boolean(settings?.feishu_enabled),
+    feishuConfigured: Boolean(webhook),
+    feishuWebhookMasked: maskWebhookUrl(webhook),
+    feishuSecretConfigured: Boolean(secret),
+    notifyFutureDays: clampInteger(settings?.notify_future_days, 0, 30, 3),
+    updatedAt: settings?.updated_at || "",
+  };
+}
+
+function notificationTargetFromSettings(settings) {
+  const webhookUrl = String(settings?.feishu_webhook || "").trim();
+  return {
+    enabled: Boolean(settings?.feishu_enabled) && Boolean(webhookUrl),
+    webhookUrl,
+    webhookSecret: String(settings?.feishu_secret || "").trim(),
+    notifyFutureDays: clampInteger(settings?.notify_future_days, 0, 30, 3),
+  };
+}
+
+function maskWebhookUrl(webhook) {
+  if (!webhook) return "";
+  try {
+    const url = new URL(webhook);
+    const token = url.pathname.split("/").filter(Boolean).pop() || "";
+    const suffix = token.length > 8 ? token.slice(-8) : token;
+    return `${url.hostname}/.../${suffix || "已保存"}`;
+  } catch {
+    return "已保存";
+  }
+}
+
+function validateFeishuWebhookForStore(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw userError("飞书机器人 Webhook 格式无效。", 400);
+  }
+  const allowedHosts = new Set(["open.feishu.cn", "open.larksuite.com"]);
+  if (url.protocol !== "https:" || !allowedHosts.has(url.hostname) || !url.pathname.startsWith("/open-apis/bot/v2/hook/")) {
+    throw userError("只支持飞书或 Lark 自定义机器人 Webhook。", 400);
+  }
 }
 
 function userStatsFromWorkspaceRows(workspaces, wallets) {

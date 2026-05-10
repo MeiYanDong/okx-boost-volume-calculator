@@ -51,6 +51,8 @@
   子 todo：[S22 账号额度与扫描访问闭环加固](./todos/2026-05-10-quota-auth-audit.md)
 - [x] S23 管理员用户管理
   子 todo：[S23 管理员用户管理](./todos/2026-05-10-admin-user-management.md)
+- [x] S24 用户级飞书通知配置
+  子 todo：[S24 用户级飞书通知配置](./todos/2026-05-10-user-feishu-settings.md)
 
 ## 维护规则
 

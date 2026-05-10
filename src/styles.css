@@ -2238,8 +2238,100 @@ tr:last-child td {
 
 .invite-admin-card,
 .invite-list-card,
+.notification-settings-card,
 .user-list-card {
   grid-column: span 2;
+}
+
+.notification-settings-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notification-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 260px;
+}
+
+.notification-toggle input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--lime);
+}
+
+.notification-toggle span {
+  display: grid;
+  gap: 4px;
+}
+
+.notification-toggle strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.notification-toggle small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 730;
+  line-height: 1.45;
+}
+
+.notification-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--panel-2);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.notification-status-pill.ready {
+  border-color: rgba(186, 255, 26, 0.32);
+  color: var(--lime);
+  background: var(--lime-soft);
+}
+
+.notification-form-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(220px, 0.8fr) 150px;
+  gap: 12px;
+}
+
+.notification-form-grid label {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-form-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.notification-form-grid input {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  background: var(--panel-2);
+  color: var(--ink);
+  padding: 0 11px;
+}
+
+.notification-form-grid input:hover,
+.notification-form-grid input:focus {
+  border-color: rgba(186, 255, 26, 0.3);
+  background: var(--panel-3);
 }
 
 .invite-form-grid {
@@ -2295,6 +2387,12 @@ tr:last-child td {
   border-color: rgba(186, 255, 26, 0.32);
   background: var(--lime-soft);
   color: var(--lime);
+}
+
+.invite-admin-actions button.danger-action:not(:disabled):hover {
+  border-color: rgba(255, 102, 85, 0.3);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .invite-admin-actions button:disabled,
@@ -3049,6 +3147,7 @@ a {
 
   .invite-admin-card,
   .invite-list-card,
+  .notification-settings-card,
   .user-list-card {
     grid-column: auto;
   }
@@ -3079,6 +3178,7 @@ a {
   .overview-summary-grid,
   .bonus-card-grid,
   .invite-form-grid,
+  .notification-form-grid,
   .settings-stat-grid,
   .forecast-row,
   .wallet-management-grid {

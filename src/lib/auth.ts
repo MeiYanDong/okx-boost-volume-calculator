@@ -50,6 +50,15 @@ export type AdminUserProfile = {
   updatedAt: string;
 };
 
+export type NotificationSettings = {
+  feishuEnabled: boolean;
+  feishuConfigured: boolean;
+  feishuWebhookMasked: string;
+  feishuSecretConfigured: boolean;
+  notifyFutureDays: number;
+  updatedAt: string;
+};
+
 export function readAuthSession(): AuthSession | null {
   const storage = safeStorage();
   if (!storage) return null;
@@ -180,6 +189,28 @@ export async function updateAdminUser(
   return payload.user;
 }
 
+export async function getNotificationSettings(session: AuthSession): Promise<NotificationSettings> {
+  const payload = await authRequest({ action: "get-notification-settings" }, authHeaders(session));
+  if (!isObject(payload) || !isNotificationSettings(payload.settings)) throw new Error("飞书通知配置响应不完整。");
+  return payload.settings;
+}
+
+export async function updateNotificationSettings(
+  params: {
+    feishuEnabled?: boolean;
+    feishuWebhook?: string;
+    feishuSecret?: string;
+    clearFeishuWebhook?: boolean;
+    clearFeishuSecret?: boolean;
+    notifyFutureDays?: number;
+  },
+  session: AuthSession,
+): Promise<NotificationSettings> {
+  const payload = await authRequest({ action: "update-notification-settings", ...params }, authHeaders(session));
+  if (!isObject(payload) || !isNotificationSettings(payload.settings)) throw new Error("飞书通知配置响应不完整。");
+  return payload.settings;
+}
+
 async function authRequest(body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<unknown> {
   const response = await fetch("/api/auth", {
     method: "POST",
@@ -252,6 +283,18 @@ function isAdminUserProfile(value: unknown): value is AdminUserProfile {
     typeof value.workspaceCount === "number" &&
     typeof value.walletCount === "number" &&
     typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isNotificationSettings(value: unknown): value is NotificationSettings {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.feishuEnabled === "boolean" &&
+    typeof value.feishuConfigured === "boolean" &&
+    typeof value.feishuWebhookMasked === "string" &&
+    typeof value.feishuSecretConfigured === "boolean" &&
+    typeof value.notifyFutureDays === "number" &&
     typeof value.updatedAt === "string"
   );
 }

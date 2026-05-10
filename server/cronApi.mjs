@@ -7,6 +7,7 @@ import {
 } from "./archiveStore.mjs";
 import { requestUrl, sendFeishuText, sendJson, validateAccess } from "./proxy.mjs";
 import {
+  getSupabaseWorkspaceNotificationTarget,
   getSupabaseWorkspaceArchive,
   isSupabaseConfigured,
   listSupabaseWorkspaceIds,
@@ -50,13 +51,24 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
       await saveCronWorkspaceArchive(env, workspace, result.updatedArchive);
     }
 
+    const notificationTarget = await resolveNotificationTarget(env, workspace, config);
+    const shouldNotify = shouldNotifyForTarget(result, notificationTarget);
     let notified = false;
-    if (result.shouldNotify && !dryRun) {
-      await sendFeishuText(`归档：${workspace.provider}\n数据空间：${workspaceId}\n${result.notificationText}`, config);
+    let notificationProvider = "";
+    if (shouldNotify && !dryRun) {
+      await sendFeishuText(
+        `归档：${workspace.provider}\n数据空间：${workspaceId}\n${result.notificationText}`,
+        {
+          ...config,
+          feishuWebhookUrl: notificationTarget.webhookUrl,
+          feishuWebhookSecret: notificationTarget.webhookSecret,
+        },
+      );
       notified = true;
+      notificationProvider = notificationTarget.provider;
     }
 
-    results.push({ provider: workspace.provider, workspaceId, result, notified });
+    results.push({ provider: workspace.provider, workspaceId, result, notified, notificationProvider, shouldNotify });
   }
 
   const summary = results.reduce(
@@ -79,13 +91,14 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
       workspaceCount: results.length,
       notified: results.some((item) => item.notified),
       snapshotDate: firstResult?.snapshotDate || null,
-      shouldNotify: results.some((item) => item.result.shouldNotify),
+      shouldNotify: results.some((item) => item.shouldNotify),
       summary,
       workspaces: results.map((item) => ({
         provider: item.provider,
         workspaceId: item.workspaceId,
         notified: item.notified,
-        shouldNotify: item.result.shouldNotify,
+        notificationProvider: item.notificationProvider || undefined,
+        shouldNotify: item.shouldNotify,
         summary: item.result.summary,
         forecast: item.result.forecastRows.map((row) => ({
           snapshotDate: row.snapshotDate,
@@ -130,6 +143,34 @@ async function saveCronWorkspaceArchive(env, workspace, archive) {
     return;
   }
   await setServerArchive(archive, env, workspace.workspaceId);
+}
+
+async function resolveNotificationTarget(env, workspace, config) {
+  if (workspace.provider === "supabase") {
+    const target = await getSupabaseWorkspaceNotificationTarget(env, workspace.workspaceId).catch(() => null);
+    if (target?.enabled) {
+      return {
+        provider: "supabase",
+        webhookUrl: target.webhookUrl,
+        webhookSecret: target.webhookSecret,
+        notifyFutureDays: target.notifyFutureDays,
+      };
+    }
+  }
+  return {
+    provider: "global",
+    webhookUrl: config.feishuWebhookUrl,
+    webhookSecret: config.feishuWebhookSecret,
+    notifyFutureDays: 3,
+  };
+}
+
+function shouldNotifyForTarget(result, target) {
+  if (!target?.webhookUrl) return false;
+  if (result.summary.failed > 0) return true;
+  const horizon = Number.isInteger(target.notifyFutureDays) ? target.notifyFutureDays : 3;
+  const forecastRows = Array.isArray(result.forecastRows) ? result.forecastRows.slice(0, horizon + 1) : [];
+  return forecastRows.some((row) => row.atRiskWallets > 0);
 }
 
 function validateCronAccess(request, config, env) {

@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { getSupabaseUserFromRequest } from "./supabaseStore.mjs";
+import { getSupabaseUserFromRequest, getUserNotificationTarget } from "./supabaseStore.mjs";
 
 const maxBodyBytes = 1_000_000;
 const upstreamTimeoutMs = 25_000;
@@ -93,9 +93,27 @@ export async function handleExplorerProxy(request, response, config, url = reque
   sendJson(response, 200, payload, { "cache-control": "no-store" });
 }
 
-export async function handleFeishuNotify(request, response, config) {
+export async function handleFeishuNotify(request, response, config, env = process.env) {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Use POST" });
+    return;
+  }
+
+  const body = await readJsonBody(request);
+  const text = validateFeishuNotifyBody(body);
+  const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
+  if (auth?.user?.id) {
+    const target = await getUserNotificationTarget(env, auth.user);
+    if (!target.enabled) {
+      sendJson(response, 400, { error: "Feishu webhook is not enabled for this user" }, { "cache-control": "no-store" });
+      return;
+    }
+    await sendFeishuText(text, {
+      ...config,
+      feishuWebhookUrl: target.webhookUrl,
+      feishuWebhookSecret: target.webhookSecret,
+    });
+    sendJson(response, 200, { ok: true, provider: "supabase" }, { "cache-control": "no-store" });
     return;
   }
 
@@ -105,10 +123,8 @@ export async function handleFeishuNotify(request, response, config) {
     return;
   }
 
-  const body = await readJsonBody(request);
-  const text = validateFeishuNotifyBody(body);
   await sendFeishuText(text, config);
-  sendJson(response, 200, { ok: true }, { "cache-control": "no-store" });
+  sendJson(response, 200, { ok: true, provider: "global" }, { "cache-control": "no-store" });
 }
 
 export async function sendFeishuText(text, config) {

@@ -34,6 +34,7 @@ import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPasswor
 import {
   authHeaders,
   createAdminInvite,
+  getNotificationSettings,
   listAdminUsers,
   listAdminInvites,
   readAuthSession,
@@ -44,12 +45,14 @@ import {
   shouldRefreshSession,
   signInWithEmail,
   updateAdminUser,
+  updateNotificationSettings,
   validateAuthSession,
   writeAuthSession,
   type AdminInvite,
   type AdminUserProfile,
   type AuthMode,
   type AuthSession,
+  type NotificationSettings,
 } from "./lib/auth";
 import type { CalculationResult, ParsedSwap, TokenGroup, TokenMeta } from "./lib/types";
 
@@ -732,7 +735,9 @@ export default function App() {
     try {
       const response = await fetch("/api/feishu", {
         method: "POST",
-        headers: serverAccessHeaders({ "content-type": "application/json" }),
+        headers: authSession
+          ? authHeaders(authSession, { "content-type": "application/json" })
+          : serverAccessHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ text: buildFeishuForecastMessage(riskRow, targetTotal) }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -2191,10 +2196,114 @@ function SettingsPage({
   const [userRows, setUserRows] = useState<AdminUserProfile[]>([]);
   const [userQuotaDrafts, setUserQuotaDrafts] = useState<Record<string, string>>({});
   const [userState, setUserState] = useState<InviteAdminState>({ status: "idle", message: "" });
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
+  const [notificationState, setNotificationState] = useState<InviteAdminState>({ status: "idle", message: "" });
+  const [feishuEnabled, setFeishuEnabled] = useState(false);
+  const [feishuWebhook, setFeishuWebhook] = useState("");
+  const [feishuSecret, setFeishuSecret] = useState("");
+  const [notifyFutureDays, setNotifyFutureDays] = useState("3");
   const isAdminSession = authSession?.user.role === "admin" && authSession.user.status !== "disabled";
   const adminAuth = { session: isAdminSession ? authSession : null, accessPassword };
   const adminReady = isAdminSession || Boolean(accessPassword.trim());
   const adminModeLabel = isAdminSession ? "管理员账号" : "初始化访问码";
+  const notificationBusy = notificationState.status === "loading";
+
+  useEffect(() => {
+    if (!authSession) {
+      setNotificationSettings(null);
+      setNotificationState({ status: "idle", message: "" });
+      setFeishuEnabled(false);
+      setFeishuWebhook("");
+      setFeishuSecret("");
+      setNotifyFutureDays("3");
+      return;
+    }
+    void refreshNotificationSettings();
+  }, [authSession?.accessToken]);
+
+  function applyNotificationSettings(settings: NotificationSettings) {
+    setNotificationSettings(settings);
+    setFeishuEnabled(settings.feishuEnabled);
+    setNotifyFutureDays(String(settings.notifyFutureDays));
+    setFeishuWebhook("");
+    setFeishuSecret("");
+  }
+
+  async function refreshNotificationSettings() {
+    if (!authSession) {
+      setNotificationState({ status: "error", message: "请先登录账号。" });
+      return;
+    }
+    setNotificationState({ status: "loading", message: "正在读取飞书配置..." });
+    try {
+      const settings = await getNotificationSettings(authSession);
+      applyNotificationSettings(settings);
+      setNotificationState({ status: "ready", message: settings.feishuConfigured ? "已读取飞书配置。" : "尚未保存飞书 Webhook。" });
+    } catch (caught) {
+      setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function saveNotificationSettings() {
+    if (!authSession || notificationBusy) {
+      setNotificationState({ status: "error", message: "请先登录账号。" });
+      return;
+    }
+    const days = Number(notifyFutureDays);
+    if (!Number.isInteger(days) || days < 0 || days > 30) {
+      setNotificationState({ status: "error", message: "风险预测天数必须是 0 到 30 的整数。" });
+      return;
+    }
+    setNotificationState({ status: "loading", message: "正在保存飞书配置..." });
+    try {
+      const settings = await updateNotificationSettings(
+        {
+          feishuEnabled,
+          notifyFutureDays: days,
+          ...(feishuWebhook.trim() ? { feishuWebhook: feishuWebhook.trim() } : {}),
+          ...(feishuSecret.trim() ? { feishuSecret: feishuSecret.trim() } : {}),
+        },
+        authSession,
+      );
+      applyNotificationSettings(settings);
+      setNotificationState({ status: "ready", message: settings.feishuEnabled ? "飞书提醒已启用。" : "飞书配置已保存，提醒未启用。" });
+    } catch (caught) {
+      setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function clearNotificationSettings() {
+    if (!authSession || notificationBusy) return;
+    if (!window.confirm("确认清除当前账号保存的飞书机器人配置？")) return;
+    setNotificationState({ status: "loading", message: "正在清除飞书配置..." });
+    try {
+      const settings = await updateNotificationSettings({ clearFeishuWebhook: true, notifyFutureDays: 3 }, authSession);
+      applyNotificationSettings(settings);
+      setNotificationState({ status: "ready", message: "飞书配置已清除。" });
+    } catch (caught) {
+      setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function sendNotificationTest() {
+    if (!authSession || notificationBusy) {
+      setNotificationState({ status: "error", message: "请先登录账号。" });
+      return;
+    }
+    setNotificationState({ status: "loading", message: "正在发送测试消息..." });
+    try {
+      const response = await fetch("/api/feishu", {
+        method: "POST",
+        headers: authHeaders(authSession, { "content-type": "application/json" }),
+        body: JSON.stringify({ text: `OKX Boost 测试提醒\n账号：${authSession.user.email}\n时间：${new Date().toLocaleString()}` }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setNotificationState({ status: "ready", message: "测试消息已发送。" });
+    } catch (caught) {
+      setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
 
   async function refreshInvites() {
     if (!adminReady) {
@@ -2360,6 +2469,94 @@ function SettingsPage({
             <MetricLine label="已归档钱包" value={String(portfolio.archivedWallets)} />
             <MetricLine label="待处理钱包" value={String(portfolio.pendingWallets)} />
           </div>
+        </section>
+
+        <section className="settings-card notification-settings-card">
+          <div className="settings-card-title">
+            <Send size={18} />
+            <h2>飞书通知</h2>
+          </div>
+
+          <div className="notification-settings-top">
+            <label className="notification-toggle">
+              <input
+                type="checkbox"
+                checked={feishuEnabled}
+                onChange={(event) => setFeishuEnabled(event.target.checked)}
+                disabled={!authSession || notificationBusy}
+              />
+              <span>
+                <strong>启用账号级自动提醒</strong>
+                <small>手动风险提醒和每日 Cron 都优先使用当前登录账号的配置。</small>
+              </span>
+            </label>
+            <div className={notificationSettings?.feishuConfigured ? "notification-status-pill ready" : "notification-status-pill"}>
+              {notificationSettings?.feishuConfigured ? "已保存 Webhook" : "未保存 Webhook"}
+            </div>
+          </div>
+
+          <div className="notification-form-grid">
+            <label>
+              <span>飞书机器人 Webhook</span>
+              <input
+                type="password"
+                value={feishuWebhook}
+                onChange={(event) => setFeishuWebhook(event.target.value)}
+                placeholder={
+                  notificationSettings?.feishuConfigured
+                    ? `${notificationSettings.feishuWebhookMasked}，留空不修改`
+                    : "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+                }
+                disabled={!authSession || notificationBusy}
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              <span>签名密钥</span>
+              <input
+                type="password"
+                value={feishuSecret}
+                onChange={(event) => setFeishuSecret(event.target.value)}
+                placeholder={notificationSettings?.feishuSecretConfigured ? "已保存，留空不修改" : "未启用签名可留空"}
+                disabled={!authSession || notificationBusy}
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              <span>预测未来天数</span>
+              <input
+                type="number"
+                min="0"
+                max="30"
+                value={notifyFutureDays}
+                onChange={(event) => setNotifyFutureDays(event.target.value)}
+                disabled={!authSession || notificationBusy}
+              />
+            </label>
+          </div>
+
+          <div className="invite-admin-actions">
+            <button type="button" onClick={saveNotificationSettings} disabled={!authSession || notificationBusy}>
+              保存飞书配置
+            </button>
+            <button
+              type="button"
+              onClick={sendNotificationTest}
+              disabled={!authSession || notificationBusy || !notificationSettings?.feishuConfigured || !feishuEnabled}
+            >
+              发送测试
+            </button>
+            <button type="button" onClick={refreshNotificationSettings} disabled={!authSession || notificationBusy}>
+              刷新配置
+            </button>
+            <button type="button" className="danger-action" onClick={clearNotificationSettings} disabled={!authSession || notificationBusy}>
+              清除配置
+            </button>
+          </div>
+
+          <p className={`invite-admin-message ${notificationState.status}`}>
+            {authSession ? notificationState.message || "保存 Webhook 后，风险提醒会按账号隔离。" : "登录账号后配置飞书通知。"}
+          </p>
         </section>
 
         <section className="settings-card invite-admin-card">

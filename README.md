@@ -47,12 +47,13 @@ OKX Boost 的计算对新手不友好，主要有几个坑：
 - 管理员可在偏好设置里生成、查看和撤销邀请码；首个管理员用私有访问码初始化，后续使用管理员账号管理
 - 管理员可查看用户、调整钱包额度、启用或禁用账号
 - 钱包额度服务端强制生效，普通用户超额后不能继续同步归档
+- 登录用户可以在偏好设置里保存自己的飞书机器人配置
 - 单钱包增量刷新，只补扫新区块
 - 强制重扫，用于重建异常归档
 - 批量钱包 3 路有限并行刷新
 - 每个钱包、每个日期、每个代币单独设置额外加成
-- 快照预警支持一键发送飞书群机器人提醒
-- Vercel 私人部署支持每天自动增量刷新，并在未来快照低于目标时自动飞书提醒
+- 快照预警支持一键发送账号级飞书群机器人提醒
+- Vercel 私人部署支持每天自动增量刷新，并在未来快照低于目标时按用户配置自动飞书提醒
 - 交易发现来源展示：`Ankr 索引`、`Explorer 索引`、`RPC 兜底`、`本地归档`
 
 ## 结果
@@ -97,7 +98,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 3. 配置服务端数据源，不要把密钥暴露到前端页面，也不要提交密钥文件。
 4. 优先配置 Ankr 钱包索引用来发现交易；配置 BNB Chain RPC 用来解析交易。
 5. 如果我要跨部署保存数据，请优先配置 Supabase 邀请制账号；旧版本也可以继续用 Vercel Upstash Redis。
-6. 如果我要飞书提醒，请配置飞书自定义机器人 Webhook；如果机器人开启签名，也配置签名密钥。
+6. 如果我要飞书提醒，请帮我登录后在偏好设置里保存飞书自定义机器人 Webhook；如果机器人开启签名，也保存签名密钥。
 7. 打开本地页面，导入我的钱包地址。
 8. 选择快照日期。
 9. 先刷新所有钱包，得到最近 10 天的初始结果。
@@ -131,17 +132,18 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 1. 检查 Vercel 项目是否已关联正确仓库。
 2. 在 Vercel 环境变量里配置 Ankr、BNB Chain RPC、访问密码等服务端变量。
 3. 配置 Vercel Upstash Redis，用来保存钱包列表、扫描结果、加成规则和自动刷新状态。
-4. 如果我要多用户账号隔离，请配置 Supabase：SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、SUPABASE_SECRET_KEY。
+4. 如果我要多用户账号隔离，请配置 Supabase：SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、SUPABASE_SECRET_KEY，并实际验证 /api/auth?action=me 返回 configured: true。
 5. 配置 CRON_SECRET，用来保护每日自动刷新接口。
-6. 如果我要飞书提醒，在 Vercel 环境变量里配置 FEISHU_WEBHOOK_URL；如果机器人开启签名，再配置 FEISHU_WEBHOOK_SECRET。
+6. 如果我要飞书提醒，优先让我登录后在偏好设置里配置账号级 Webhook；如果需要旧版全局兜底，再在 Vercel 环境变量里配置 FEISHU_WEBHOOK_URL 和 FEISHU_WEBHOOK_SECRET。
 7. 部署生产版本。
 8. 验证页面能打开。
 9. 验证不带访问密码时 API 会拒绝。
 10. 验证带访问密码时 Ankr 钱包索引和 RPC 能正常返回。
 11. 验证 Supabase 邀请码创建、注册、登录、刷新页面恢复归档。
 12. 验证登录用户不填写私有访问码也能扫描，且钱包数量超过账号额度时会被服务端拒绝保存。
-13. 验证 /api/cron/daily-refresh?dryRun=1 能返回自动刷新预览，但不真实发送飞书。
-14. 告诉我最终链接、是否启用访问保护、是否完成线上烟测。
+13. 验证账号级飞书配置可以保存，且返回给前端的是脱敏信息。
+14. 验证 /api/cron/daily-refresh?dryRun=1 能返回自动刷新预览，但不真实发送飞书。
+15. 告诉我最终链接、是否启用访问保护、是否完成线上烟测。
 ```
 
 私人部署不要公开发给不可信的人。否则别人会消耗你的 Ankr、Chainstack 或 Explorer 额度。
@@ -198,6 +200,8 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 线上每天北京时间 08:05 会自动做一次增量刷新。它确认的是上一 UTC 日快照，并同时预测未来 3 次快照。如果某个钱包未来会低于单钱包 10 日累计目标，系统会自动发飞书提醒。
 
 自动提醒只在“有风险”或“自动刷新失败”时发送，不发送无意义的安全日报。
+
+登录用户可以在“偏好设置 → 飞书通知”里保存自己的飞书机器人 Webhook 和签名密钥。手动风险提醒和每日自动提醒都会优先使用这个账号级配置；如果账号没有配置，私人部署仍可以用 Vercel 环境变量里的全局 Webhook 兜底。
 
 ## 多个用户怎么区分数据
 

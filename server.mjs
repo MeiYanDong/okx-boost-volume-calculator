@@ -60,7 +60,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/feishu") {
-      await handleFeishuNotify(request, response, config);
+      await handleFeishuNotify(request, response, config, env);
       return;
     }
 

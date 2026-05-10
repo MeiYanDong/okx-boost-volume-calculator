@@ -1,5 +1,6 @@
 import {
   createInvite,
+  getUserNotificationSettings,
   getSupabaseUserFromRequest,
   hasActiveAdminProfile,
   isAdminAuth,
@@ -10,6 +11,7 @@ import {
   refreshAuthSession,
   revokeInvite,
   signInWithPassword,
+  updateUserNotificationSettings,
   updateAdminUser,
 } from "./supabaseStore.mjs";
 import { readJsonBody, requestUrl, sendJson, validateAccess } from "./proxy.mjs";
@@ -111,7 +113,36 @@ export async function handleAuthApi(request, response, config, env = process.env
     return;
   }
 
+  if (action === "get-notification-settings") {
+    const auth = await validateUserAccess(request, env);
+    const settings = await getUserNotificationSettings(env, auth.user);
+    sendJson(response, 200, { ok: true, settings }, { "cache-control": "no-store" });
+    return;
+  }
+
+  if (action === "update-notification-settings") {
+    const auth = await validateUserAccess(request, env);
+    const settings = await updateUserNotificationSettings(env, auth.user, body);
+    sendJson(response, 200, { ok: true, settings }, { "cache-control": "no-store" });
+    return;
+  }
+
   sendJson(response, 400, { error: "Unknown auth action" }, { "cache-control": "no-store" });
+}
+
+async function validateUserAccess(request, env) {
+  const auth = await getSupabaseUserFromRequest(request, env);
+  if (!auth?.user?.id) {
+    const error = new Error("请先登录账号。");
+    error.statusCode = 401;
+    throw error;
+  }
+  if (auth.profile?.status && auth.profile.status !== "active") {
+    const error = new Error("账号已被禁用。");
+    error.statusCode = 403;
+    throw error;
+  }
+  return auth;
 }
 
 async function validateAdminAccess(request, config, env) {
