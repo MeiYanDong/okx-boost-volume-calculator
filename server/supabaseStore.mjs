@@ -145,6 +145,69 @@ export async function updateAdminUser(input, actorUserId = "", env = process.env
   return redactAdminUser(updated || { ...profile, ...patch });
 }
 
+export async function consumeUserUsage(env, user, input) {
+  ensureSupabaseConfigured(env);
+  const profile = await getActiveProfileForUser(env, user.id);
+  const mode = input?.mode === "rescan" ? "rescan" : "refresh";
+  const amount = clampInteger(input?.amount, 1, 500, 1);
+  const usageDate = utcDateString(new Date());
+  const limit = mode === "rescan" ? Number(profile.daily_rescan_limit || 0) : Number(profile.daily_refresh_limit || 0);
+  const label = mode === "rescan" ? "强制重扫" : "刷新";
+  const countColumn = mode === "rescan" ? "rescan_count" : "refresh_count";
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const [current] = await restSelect(env, "usage_daily", {
+      user_id: `eq.${user.id}`,
+      usage_date: `eq.${usageDate}`,
+      select: "user_id,usage_date,refresh_count,rescan_count,rpc_request_count,created_at,updated_at",
+      limit: "1",
+    });
+    const refreshCount = Number(current?.refresh_count || 0);
+    const rescanCount = Number(current?.rescan_count || 0);
+    const currentCount = mode === "rescan" ? rescanCount : refreshCount;
+
+    if (limit > 0 && currentCount + amount > limit) {
+      throw userError(`今日${label}额度不足：已用 ${currentCount}，本次 ${amount}，上限 ${limit}。`, 429);
+    }
+
+    const nextRefreshCount = mode === "refresh" ? refreshCount + amount : refreshCount;
+    const nextRescanCount = mode === "rescan" ? rescanCount + amount : rescanCount;
+    const rpcRequestCount = Number(current?.rpc_request_count || 0);
+
+    if (!current) {
+      try {
+        const [created] = await restInsert(env, "usage_daily", [
+          {
+            user_id: user.id,
+            usage_date: usageDate,
+            refresh_count: nextRefreshCount,
+            rescan_count: nextRescanCount,
+            rpc_request_count: rpcRequestCount,
+          },
+        ]);
+        return redactUsageDaily(created, profile);
+      } catch (error) {
+        if (isConflictError(error)) continue;
+        throw error;
+      }
+    }
+
+    const usagePatch = {
+      rpc_request_count: rpcRequestCount,
+    };
+    usagePatch[countColumn] = mode === "rescan" ? nextRescanCount : nextRefreshCount;
+
+    const [saved] = await restPatch(env, "usage_daily", {
+      user_id: `eq.${user.id}`,
+      usage_date: `eq.${usageDate}`,
+      [countColumn]: `eq.${currentCount}`,
+    }, usagePatch);
+    if (saved) return redactUsageDaily(saved, profile);
+  }
+
+  throw userError("用量更新冲突，请稍后重试。", 409);
+}
+
 export async function revokeInvite(input, env = process.env) {
   ensureSupabaseConfigured(env);
   const inviteId = String(input?.inviteId || input?.id || "").trim();
@@ -219,6 +282,8 @@ export async function redeemInvite(input, env = process.env) {
         email,
         role: invite.role || "user",
         maxWallets: invite.max_wallets,
+        dailyRefreshLimit: invite.daily_refresh_limit,
+        dailyRescanLimit: invite.daily_rescan_limit,
       },
       workspace: workspaceToClient(workspace),
     };
@@ -754,6 +819,8 @@ async function enrichSessionWithProfile(env, session) {
       role: profile?.role || "user",
       status: profile?.status || "active",
       maxWallets: Number(profile?.max_wallets || 0),
+      dailyRefreshLimit: Number(profile?.daily_refresh_limit || 0),
+      dailyRescanLimit: Number(profile?.daily_rescan_limit || 0),
     },
   };
 }
@@ -855,6 +922,17 @@ function generateInviteCode() {
   return `OKX-${randomBytes(9).toString("base64url").toUpperCase()}`;
 }
 
+function utcDateString(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function isConflictError(error) {
+  return (
+    Number(error?.statusCode || 0) === 409 ||
+    /duplicate key|unique constraint|already exists/i.test(String(error?.message || ""))
+  );
+}
+
 function redactInvite(invite) {
   if (!invite) return null;
   return {
@@ -885,6 +963,17 @@ function redactAdminUser(profile, stats = {}) {
     walletCount: Number(stats.walletCount || 0),
     createdAt: profile.created_at || "",
     updatedAt: profile.updated_at || "",
+  };
+}
+
+function redactUsageDaily(usage, profile) {
+  return {
+    usageDate: String(usage?.usage_date || ""),
+    refreshCount: Number(usage?.refresh_count || 0),
+    rescanCount: Number(usage?.rescan_count || 0),
+    rpcRequestCount: Number(usage?.rpc_request_count || 0),
+    dailyRefreshLimit: Number(profile?.daily_refresh_limit || 0),
+    dailyRescanLimit: Number(profile?.daily_rescan_limit || 0),
   };
 }
 

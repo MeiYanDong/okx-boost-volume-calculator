@@ -66,8 +66,8 @@ export async function fetchAnkrAddressOkxHashes(params: {
 
       const hash = tx.hash || "";
       if (!/^0x[a-fA-F0-9]{64}$/.test(hash)) continue;
-      if (tx.from && normalizeAddress(tx.from) !== address) continue;
-      if (tx.to && !routers.has(normalizeAddress(tx.to))) continue;
+      if (!tx.from || normalizeAddress(tx.from) !== address) continue;
+      if (!tx.to || !routers.has(normalizeAddress(tx.to))) continue;
       if (tx.status === "0" || tx.status === "0x0" || tx.status === "failed") continue;
       hashes.add(hash);
     }

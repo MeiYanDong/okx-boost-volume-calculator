@@ -7,6 +7,8 @@ export type AuthUser = {
   role?: "admin" | "user";
   status?: "active" | "disabled";
   maxWallets?: number;
+  dailyRefreshLimit?: number;
+  dailyRescanLimit?: number;
 };
 
 export type AuthSession = {
@@ -57,6 +59,17 @@ export type NotificationSettings = {
   feishuSecretConfigured: boolean;
   notifyFutureDays: number;
   updatedAt: string;
+};
+
+export type UsageMode = "refresh" | "rescan";
+
+export type UsageReservation = {
+  usageDate: string;
+  refreshCount: number;
+  rescanCount: number;
+  rpcRequestCount: number;
+  dailyRefreshLimit: number;
+  dailyRescanLimit: number;
 };
 
 export function readAuthSession(): AuthSession | null {
@@ -136,6 +149,8 @@ export async function createAdminInvite(
     email: string;
     role: "admin" | "user";
     maxWallets: number;
+    dailyRefreshLimit: number;
+    dailyRescanLimit: number;
     expiresInDays: number;
   },
   auth: { accessPassword?: string; session?: AuthSession | null },
@@ -146,6 +161,8 @@ export async function createAdminInvite(
       email: params.email,
       role: params.role,
       maxWallets: params.maxWallets,
+      dailyRefreshLimit: params.dailyRefreshLimit,
+      dailyRescanLimit: params.dailyRescanLimit,
       expiresInDays: params.expiresInDays,
     },
     adminHeaders(auth),
@@ -182,6 +199,8 @@ export async function updateAdminUser(
     userId: string;
     status?: "active" | "disabled";
     maxWallets?: number;
+    dailyRefreshLimit?: number;
+    dailyRescanLimit?: number;
   },
   auth: { accessPassword?: string; session?: AuthSession | null },
 ): Promise<AdminUserProfile> {
@@ -210,6 +229,15 @@ export async function updateNotificationSettings(
   const payload = await authRequest({ action: "update-notification-settings", ...params }, authHeaders(session));
   if (!isObject(payload) || !isNotificationSettings(payload.settings)) throw new Error("飞书通知配置响应不完整。");
   return payload.settings;
+}
+
+export async function consumeScanUsage(
+  params: { mode: UsageMode; amount: number },
+  session: AuthSession,
+): Promise<UsageReservation> {
+  const payload = await authRequest({ action: "consume-usage", mode: params.mode, amount: params.amount }, authHeaders(session));
+  if (!isObject(payload) || !isUsageReservation(payload.usage)) throw new Error("额度扣减响应不完整。");
+  return payload.usage;
 }
 
 async function authRequest(body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<unknown> {
@@ -251,7 +279,9 @@ function isAuthUser(value: unknown): value is AuthUser {
     typeof value.email === "string" &&
     (value.role === undefined || value.role === "admin" || value.role === "user") &&
     (value.status === undefined || value.status === "active" || value.status === "disabled") &&
-    (value.maxWallets === undefined || typeof value.maxWallets === "number")
+    (value.maxWallets === undefined || typeof value.maxWallets === "number") &&
+    (value.dailyRefreshLimit === undefined || typeof value.dailyRefreshLimit === "number") &&
+    (value.dailyRescanLimit === undefined || typeof value.dailyRescanLimit === "number")
   );
 }
 
@@ -297,6 +327,18 @@ function isNotificationSettings(value: unknown): value is NotificationSettings {
     typeof value.feishuSecretConfigured === "boolean" &&
     typeof value.notifyFutureDays === "number" &&
     typeof value.updatedAt === "string"
+  );
+}
+
+function isUsageReservation(value: unknown): value is UsageReservation {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.usageDate === "string" &&
+    typeof value.refreshCount === "number" &&
+    typeof value.rescanCount === "number" &&
+    typeof value.rpcRequestCount === "number" &&
+    typeof value.dailyRefreshLimit === "number" &&
+    typeof value.dailyRescanLimit === "number"
   );
 }
 

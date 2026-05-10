@@ -33,6 +33,7 @@ import { formatNumber, formatUsd, shortHash } from "./lib/format";
 import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPassword } from "./lib/serverAccess";
 import {
   authHeaders,
+  consumeScanUsage,
   createAdminInvite,
   getNotificationSettings,
   listAdminUsers,
@@ -53,6 +54,7 @@ import {
   type AuthMode,
   type AuthSession,
   type NotificationSettings,
+  type UsageMode,
 } from "./lib/auth";
 import type { CalculationResult, ParsedSwap, TokenGroup, TokenMeta } from "./lib/types";
 
@@ -155,6 +157,7 @@ type WalletArchiveRecord = {
 type ScanWalletOptions = {
   forceRefresh?: boolean;
   refresh?: boolean;
+  usageReserved?: boolean;
 };
 type ScanHistoryRecord = {
   id: string;
@@ -496,6 +499,10 @@ export default function App() {
       return;
     }
 
+    const usageMode: UsageMode = params.forceRefresh ? "rescan" : "refresh";
+    const usageReserved = await reserveScanUsage(usageMode, addresses.length);
+    if (!usageReserved) return;
+
     if (params.forceRefresh) {
       for (const wallet of addresses) clearPersistedResult(wallet, endDate);
     }
@@ -506,6 +513,7 @@ export default function App() {
       await scanWallet(wallet, {
         forceRefresh: params.forceRefresh,
         refresh: params.refresh,
+        usageReserved,
       });
     });
   }
@@ -615,6 +623,12 @@ export default function App() {
           ? "增量刷新新区块..."
           : "补建归档检查点..."
         : "读取链上记录...";
+    const mode = scanModeFromOptions(options);
+
+    if (!options.usageReserved) {
+      const usageReserved = await reserveScanUsage(mode === "rescan" ? "rescan" : "refresh", 1);
+      if (!usageReserved) return false;
+    }
 
     patchRecord(normalizedAddress, {
       state: "running",
@@ -627,7 +641,6 @@ export default function App() {
 
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
-    const mode = scanModeFromOptions(options);
 
     try {
       const computed = await calculateBoostVolume({
@@ -693,6 +706,26 @@ export default function App() {
         error: message,
         progress: "计算失败",
       });
+      return false;
+    }
+  }
+
+  async function reserveScanUsage(mode: UsageMode, amount: number): Promise<boolean> {
+    if (!authSession) return true;
+    try {
+      const usage = await consumeScanUsage({ mode, amount }, authSession);
+      const used = mode === "rescan" ? usage.rescanCount : usage.refreshCount;
+      const limit = mode === "rescan" ? usage.dailyRescanLimit : usage.dailyRefreshLimit;
+      const label = mode === "rescan" ? "强制重扫" : "刷新";
+      setAuthState({
+        status: "ready",
+        message: limit > 0 ? `今日${label}额度 ${used}/${limit}` : `今日${label}额度已记录 ${used} 次`,
+      });
+      return true;
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setAuthState({ status: "error", message });
+      setArchiveSyncState({ status: "error", message });
       return false;
     }
   }
@@ -2219,11 +2252,15 @@ function SettingsPage({
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "user">("user");
   const [inviteMaxWallets, setInviteMaxWallets] = useState("20");
+  const [inviteDailyRefreshLimit, setInviteDailyRefreshLimit] = useState("50");
+  const [inviteDailyRescanLimit, setInviteDailyRescanLimit] = useState("10");
   const [inviteExpiresInDays, setInviteExpiresInDays] = useState("14");
   const [inviteRows, setInviteRows] = useState<AdminInvite[]>([]);
   const [inviteState, setInviteState] = useState<InviteAdminState>({ status: "idle", message: "" });
   const [userRows, setUserRows] = useState<AdminUserProfile[]>([]);
   const [userQuotaDrafts, setUserQuotaDrafts] = useState<Record<string, string>>({});
+  const [userRefreshLimitDrafts, setUserRefreshLimitDrafts] = useState<Record<string, string>>({});
+  const [userRescanLimitDrafts, setUserRescanLimitDrafts] = useState<Record<string, string>>({});
   const [userState, setUserState] = useState<InviteAdminState>({ status: "idle", message: "" });
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [notificationState, setNotificationState] = useState<InviteAdminState>({ status: "idle", message: "" });
@@ -2358,11 +2395,15 @@ function SettingsPage({
     }
     setInviteState({ status: "loading", message: "正在生成邀请码..." });
     try {
+      const defaultRefreshLimit = inviteRole === "admin" ? 1000 : 50;
+      const defaultRescanLimit = inviteRole === "admin" ? 100 : 10;
       const created = await createAdminInvite(
         {
           email: inviteEmail,
           role: inviteRole,
           maxWallets: Number(inviteMaxWallets) || 20,
+          dailyRefreshLimit: inviteDailyRefreshLimit.trim() === "" ? defaultRefreshLimit : Number(inviteDailyRefreshLimit),
+          dailyRescanLimit: inviteDailyRescanLimit.trim() === "" ? defaultRescanLimit : Number(inviteDailyRescanLimit),
           expiresInDays: Number(inviteExpiresInDays) || 14,
         },
         adminAuth,
@@ -2390,6 +2431,8 @@ function SettingsPage({
       const rows = await listAdminUsers(adminAuth);
       setUserRows(rows);
       setUserQuotaDrafts(Object.fromEntries(rows.map((row) => [row.id, String(row.maxWallets || "")])));
+      setUserRefreshLimitDrafts(Object.fromEntries(rows.map((row) => [row.id, String(row.dailyRefreshLimit || "")])));
+      setUserRescanLimitDrafts(Object.fromEntries(rows.map((row) => [row.id, String(row.dailyRescanLimit || "")])));
       setUserState({ status: "ready", message: `已读取 ${rows.length} 个用户。` });
     } catch (caught) {
       setUserState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
@@ -2399,16 +2442,28 @@ function SettingsPage({
   async function saveUserQuota(row: AdminUserProfile) {
     if (!adminReady || userState.status === "loading") return;
     const maxWallets = Number(userQuotaDrafts[row.id]);
+    const dailyRefreshLimit = Number(userRefreshLimitDrafts[row.id]);
+    const dailyRescanLimit = Number(userRescanLimitDrafts[row.id]);
     if (!Number.isInteger(maxWallets) || maxWallets < 1 || maxWallets > 500) {
       setUserState({ status: "error", message: "钱包上限必须是 1 到 500 的整数。" });
       return;
     }
-    setUserState({ status: "loading", message: "正在更新钱包上限..." });
+    if (!Number.isInteger(dailyRefreshLimit) || dailyRefreshLimit < 0 || dailyRefreshLimit > 5000) {
+      setUserState({ status: "error", message: "每日刷新上限必须是 0 到 5000 的整数，0 表示不限制。" });
+      return;
+    }
+    if (!Number.isInteger(dailyRescanLimit) || dailyRescanLimit < 0 || dailyRescanLimit > 1000) {
+      setUserState({ status: "error", message: "每日强制重扫上限必须是 0 到 1000 的整数，0 表示不限制。" });
+      return;
+    }
+    setUserState({ status: "loading", message: "正在更新账号限制..." });
     try {
-      const updated = await updateAdminUser({ userId: row.id, maxWallets }, adminAuth);
+      const updated = await updateAdminUser({ userId: row.id, maxWallets, dailyRefreshLimit, dailyRescanLimit }, adminAuth);
       setUserRows((rows) => rows.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
       setUserQuotaDrafts((drafts) => ({ ...drafts, [updated.id]: String(updated.maxWallets || "") }));
-      setUserState({ status: "ready", message: "钱包上限已更新。" });
+      setUserRefreshLimitDrafts((drafts) => ({ ...drafts, [updated.id]: String(updated.dailyRefreshLimit || "") }));
+      setUserRescanLimitDrafts((drafts) => ({ ...drafts, [updated.id]: String(updated.dailyRescanLimit || "") }));
+      setUserState({ status: "ready", message: "账号限制已更新。" });
       void refreshUsers();
     } catch (caught) {
       setUserState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
@@ -2452,6 +2507,16 @@ function SettingsPage({
     setInviteMaxWallets((current) => {
       if (role === "admin" && (!current || current === "20")) return "200";
       if (role === "user" && current === "200") return "20";
+      return current;
+    });
+    setInviteDailyRefreshLimit((current) => {
+      if (role === "admin" && (!current || current === "50")) return "1000";
+      if (role === "user" && current === "1000") return "50";
+      return current;
+    });
+    setInviteDailyRescanLimit((current) => {
+      if (role === "admin" && (!current || current === "10")) return "100";
+      if (role === "user" && current === "100") return "10";
       return current;
     });
   }
@@ -2640,6 +2705,26 @@ function SettingsPage({
               />
             </label>
             <label>
+              <span>每日刷新上限</span>
+              <input
+                type="number"
+                min="0"
+                max="5000"
+                value={inviteDailyRefreshLimit}
+                onChange={(event) => setInviteDailyRefreshLimit(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>每日重扫上限</span>
+              <input
+                type="number"
+                min="0"
+                max="1000"
+                value={inviteDailyRescanLimit}
+                onChange={(event) => setInviteDailyRescanLimit(event.target.value)}
+              />
+            </label>
+            <label>
               <span>邀请码有效期</span>
               <input
                 type="number"
@@ -2687,6 +2772,9 @@ function SettingsPage({
                       {formatSavedAt(invite.createdAt)} 创建 · 上限 {invite.maxWallets} 个钱包 ·{" "}
                       {invite.role === "admin" ? "管理员" : "普通用户"}
                     </span>
+                    <small>
+                      每日刷新 {formatLimit(invite.dailyRefreshLimit)} · 每日重扫 {formatLimit(invite.dailyRescanLimit)}
+                    </small>
                   </div>
                   <em className={status.tone}>{status.label}</em>
                   <small>到期 {formatDateTime(invite.expiresAt)}</small>
@@ -2719,6 +2807,8 @@ function SettingsPage({
             {userRows.map((user) => {
               const isSelf = user.id === authSession?.user.id;
               const quotaValue = userQuotaDrafts[user.id] ?? String(user.maxWallets || "");
+              const refreshLimitValue = userRefreshLimitDrafts[user.id] ?? String(user.dailyRefreshLimit || "");
+              const rescanLimitValue = userRescanLimitDrafts[user.id] ?? String(user.dailyRescanLimit || "");
               return (
                 <article className="user-row" key={user.id}>
                   <div>
@@ -2726,7 +2816,10 @@ function SettingsPage({
                     <span>
                       {user.role === "admin" ? "管理员" : "普通用户"} · {formatSavedAt(user.createdAt)} 创建
                     </span>
-                    <small>{user.workspaceCount} 个工作区 · 钱包 {user.walletCount}/{user.maxWallets || "--"}</small>
+                    <small>
+                      {user.workspaceCount} 个工作区 · 钱包 {user.walletCount}/{user.maxWallets || "--"} · 刷新{" "}
+                      {formatLimit(user.dailyRefreshLimit)} · 重扫 {formatLimit(user.dailyRescanLimit)}
+                    </small>
                   </div>
                   <em className={user.status}>{user.status === "active" ? "启用" : "禁用"}</em>
                   <label>
@@ -2739,8 +2832,28 @@ function SettingsPage({
                       onChange={(event) => setUserQuotaDrafts((drafts) => ({ ...drafts, [user.id]: event.target.value }))}
                     />
                   </label>
+                  <label>
+                    <span>每日刷新</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="5000"
+                      value={refreshLimitValue}
+                      onChange={(event) => setUserRefreshLimitDrafts((drafts) => ({ ...drafts, [user.id]: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    <span>每日重扫</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="1000"
+                      value={rescanLimitValue}
+                      onChange={(event) => setUserRescanLimitDrafts((drafts) => ({ ...drafts, [user.id]: event.target.value }))}
+                    />
+                  </label>
                   <button type="button" onClick={() => saveUserQuota(user)} disabled={!adminReady || userState.status === "loading"}>
-                    保存上限
+                    保存限制
                   </button>
                   <button
                     type="button"
@@ -3827,6 +3940,10 @@ function formatDateTime(value?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatLimit(value: number): string {
+  return value > 0 ? `${formatNumber(value, 0)} 次/日` : "不限";
 }
 
 function inviteStatus(invite: AdminInvite): { label: string; tone: "active" | "used" | "expired" } {

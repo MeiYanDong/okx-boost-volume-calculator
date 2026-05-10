@@ -1,5 +1,6 @@
 import {
   createInvite,
+  consumeUserUsage,
   getUserNotificationSettings,
   getSupabaseUserFromRequest,
   hasActiveAdminProfile,
@@ -37,6 +38,8 @@ export async function handleAuthApi(request, response, config, env = process.env
               role: auth.profile?.role || "user",
               status: auth.profile?.status || "active",
               maxWallets: Number(auth.profile?.max_wallets || 0),
+              dailyRefreshLimit: Number(auth.profile?.daily_refresh_limit || 0),
+              dailyRescanLimit: Number(auth.profile?.daily_rescan_limit || 0),
             }
           : null,
       },
@@ -127,6 +130,13 @@ export async function handleAuthApi(request, response, config, env = process.env
     return;
   }
 
+  if (action === "consume-usage") {
+    const auth = await validateUserAccess(request, env);
+    const usage = await consumeUserUsage(env, auth.user, body);
+    sendJson(response, 200, { ok: true, usage }, { "cache-control": "no-store" });
+    return;
+  }
+
   sendJson(response, 400, { error: "Unknown auth action" }, { "cache-control": "no-store" });
 }
 
@@ -137,7 +147,12 @@ async function validateUserAccess(request, env) {
     error.statusCode = 401;
     throw error;
   }
-  if (auth.profile?.status && auth.profile.status !== "active") {
+  if (!auth.profile) {
+    const error = new Error("账号资料不存在，请重新注册或联系管理员。");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (auth.profile.status !== "active") {
     const error = new Error("账号已被禁用。");
     error.statusCode = 403;
     throw error;

@@ -2336,7 +2336,7 @@ tr:last-child td {
 
 .invite-form-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 140px 130px 130px;
+  grid-template-columns: minmax(220px, 1fr) 120px repeat(4, minmax(110px, 130px));
   gap: 12px;
 }
 
@@ -2463,7 +2463,7 @@ tr:last-child td {
 }
 
 .user-row {
-  grid-template-columns: minmax(220px, 1fr) 78px minmax(112px, 140px) 96px 80px;
+  grid-template-columns: minmax(220px, 1fr) 78px repeat(3, minmax(105px, 130px)) 96px 80px;
 }
 
 .invite-row:last-child,

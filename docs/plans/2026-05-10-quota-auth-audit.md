@@ -28,6 +28,6 @@
 
 ## 后续建议
 
-1. 将 `daily_refresh_limit` 和 `daily_rescan_limit` 升级为真正的用户级用量限制，而不是只作为邀请码/profile 字段保留。
+1. `daily_refresh_limit` 和 `daily_rescan_limit` 已在 S30 升级为真实用量限制，并补齐管理员配置入口。
 2. 飞书 Webhook 已在 S24/S25 下放为用户个人配置，后续只需继续完善通知内容和触发条件。
 3. 增加管理员用户列表、禁用用户、调整钱包额度和查看用量的入口。

@@ -2,9 +2,9 @@ import { getServerArchive, isArchiveStoreConfigured, normalizeWorkspaceId, setSe
 import { readJsonBody, requestUrl, sendJson, validateAccess } from "./proxy.mjs";
 import { getSupabaseUserFromRequest, getUserArchive, saveUserArchive } from "./supabaseStore.mjs";
 
-const maxWalletsTextLength = 20_000;
+const maxWalletsTextLength = 80_000;
 const maxBonusRulesLength = 50_000;
-const maxRecords = 200;
+const maxRecords = 500;
 
 export async function handleArchiveApi(request, response, config, env = process.env) {
   const url = requestUrl(request);

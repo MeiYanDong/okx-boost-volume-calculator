@@ -63,6 +63,8 @@
   子 todo：[S28 系统审查与权限边界加固](./todos/2026-05-10-system-audit-hardening.md)
 - [x] S29 会话与快照窗口审查
   子 todo：[S29 会话与快照窗口审查](./todos/2026-05-10-session-window-audit.md)
+- [x] S30 用量限制与规模边界审查
+  子 todo：[S30 用量限制与规模边界审查](./todos/2026-05-10-usage-limit-scale-audit.md)
 
 ## 维护规则
 
