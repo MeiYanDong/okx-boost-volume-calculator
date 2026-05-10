@@ -54,11 +54,30 @@ export async function handleAuthApi(request, response, config, env = process.env
   }
 
   if (action === "create-invite") {
-    validateAccess(request, config);
+    validateAdminAccess(request, config, env);
     const result = await createInvite(body, env);
     sendJson(response, 200, { ok: true, ...result }, { "cache-control": "no-store" });
     return;
   }
 
   sendJson(response, 400, { error: "Unknown auth action" }, { "cache-control": "no-store" });
+}
+
+function validateAdminAccess(request, config, env) {
+  try {
+    validateAccess(request, config);
+    return;
+  } catch (error) {
+    const cronSecret = String(env.CRON_SECRET || "").trim();
+    const authorization = headerValue(request.headers, "authorization");
+    if (cronSecret && authorization === `Bearer ${cronSecret}`) return;
+    throw error;
+  }
+}
+
+function headerValue(headers, name) {
+  if (typeof headers?.get === "function") return headers.get(name) || "";
+  const value = headers?.[name.toLowerCase()] || headers?.[name];
+  if (Array.isArray(value)) return value[0] || "";
+  return String(value || "");
 }

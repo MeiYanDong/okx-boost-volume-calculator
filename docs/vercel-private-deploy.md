@@ -52,7 +52,7 @@ Explorer：备选索引，不作为主依赖
 8. 做 API 保护验证。
 9. 做 Ankr 钱包索引验证。
 10. 做页面加载验证。
-11. 做 Supabase 邀请注册、登录、`/api/archive` 读写验证。
+11. 做 Supabase 邀请注册、登录、`/api/archive` 读写验证；创建测试邀请码时可用私有访问码或 `CRON_SECRET`。
 12. 做 `/api/cron/daily-refresh?dryRun=1` 验证，确认不会真实发送飞书。
 13. 如果配置了飞书 Webhook，只在确认要测试真实通知时再触发非 dry-run 请求。
 
