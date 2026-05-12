@@ -254,7 +254,7 @@ export default function App() {
     isAppView(initialUiState.currentView) ? initialUiState.currentView : "overview",
   );
   const [notifyState, setNotifyState] = useState<NotifyState>({ status: "idle", message: "" });
-  const [archiveSyncState, setArchiveSyncState] = useState<ArchiveSyncState>({ status: "idle", message: "服务端归档待同步" });
+  const [archiveSyncState, setArchiveSyncState] = useState<ArchiveSyncState>({ status: "idle", message: "云端归档待同步" });
   const [serverArchiveReady, setServerArchiveReady] = useState(false);
   const [serverArchiveContext, setServerArchiveContext] = useState("");
   const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
@@ -297,8 +297,8 @@ export default function App() {
   );
   const selectedRecord = appliedRecords.find((record) => record.address === selectedWallet) || null;
   const viewMeta = viewMetaFor(currentView, targetTotal);
-  const canUseServerArchive = Boolean(authSession || accessPassword.trim());
-  const archiveContextKey = authSession ? `auth:${authSession.user.id}` : canUseServerArchive ? `workspace:${dataSpace}` : "local";
+  const canUseServerArchive = Boolean(authSession);
+  const archiveContextKey = authSession ? `auth:${authSession.user.id}` : "local";
   const authMaxWallets = Number(authSession?.user.maxWallets || 0);
   const authWalletQuotaExceeded = Boolean(authSession && authMaxWallets > 0 && parsedWallets.entries.length > authMaxWallets);
   const primaryAction = useMemo(
@@ -395,14 +395,14 @@ export default function App() {
     const contextKey = archiveContextKey;
     async function loadServerArchive() {
       if (!canUseServerArchive) {
-        setArchiveSyncState({ status: "idle", message: "登录或填写私有访问码后同步云端归档" });
+        setArchiveSyncState({ status: "idle", message: "登录 Supabase 账号后同步云端归档" });
         setServerArchiveContext(contextKey);
         setServerArchiveReady(true);
         return;
       }
       setServerArchiveReady(false);
       setServerArchiveContext("");
-      setArchiveSyncState({ status: "loading", message: "正在读取服务端归档..." });
+      setArchiveSyncState({ status: "loading", message: "正在读取 Supabase 云端归档..." });
       try {
         const response = await fetch("/api/archive", {
           method: "GET",
@@ -410,7 +410,7 @@ export default function App() {
         });
         if (!response.ok) {
           const payload = (await response.json().catch(() => ({}))) as { error?: string };
-          throw new Error(payload.error || `服务端归档读取失败 HTTP ${response.status}`);
+          throw new Error(payload.error || `Supabase 云端归档读取失败 HTTP ${response.status}`);
         }
         const payload = (await response.json().catch(() => ({}))) as { archive?: ServerArchivePayload | null };
         const archive = payload.archive;
@@ -418,17 +418,14 @@ export default function App() {
           if (authSession) {
             resetSupabaseArchiveView();
             setArchiveSyncState({ status: "synced", message: "当前账号云端暂无归档，请先添加钱包" });
-          } else {
-            setArchiveSyncState({ status: "synced", message: `数据空间 ${dataSpace} 暂无服务端归档` });
           }
           return;
         }
         if (cancelled) return;
         hydrateServerArchive(archive);
-        setArchiveSyncState({ status: "synced", message: authSession ? "已恢复 Supabase 云端归档" : `已恢复数据空间 ${dataSpace}` });
+        setArchiveSyncState({ status: "synced", message: "已恢复 Supabase 云端归档" });
       } catch {
-        const message = authSession ? "云端归档未同步，请重新登录或稍后重试" : "服务端归档未同步，请检查私有访问码或稍后重试";
-        setArchiveSyncState({ status: "error", message });
+        setArchiveSyncState({ status: "error", message: "云端归档未同步，请重新登录或稍后重试" });
       } finally {
         if (!cancelled) {
           setServerArchiveContext(contextKey);
@@ -445,11 +442,11 @@ export default function App() {
   useEffect(() => {
     if (!serverArchiveReady || serverArchiveContext !== archiveContextKey || anyRunning) return;
     if (!canUseServerArchive) {
-      setArchiveSyncState({ status: "idle", message: "登录或填写私有访问码后同步云端归档" });
+      setArchiveSyncState({ status: "idle", message: "登录 Supabase 账号后同步云端归档" });
       return;
     }
     if (shouldSkipServerArchiveSync(walletsText, records, scanHistory)) {
-      setArchiveSyncState({ status: "idle", message: "添加钱包或完成扫描后同步服务端归档" });
+      setArchiveSyncState({ status: "idle", message: "添加钱包或完成扫描后同步 Supabase 云端归档" });
       return;
     }
     if (authWalletQuotaExceeded) {
@@ -460,7 +457,7 @@ export default function App() {
       return;
     }
     const timer = window.setTimeout(() => {
-      setArchiveSyncState({ status: "saving", message: "正在同步服务端归档..." });
+      setArchiveSyncState({ status: "saving", message: "正在同步 Supabase 云端归档..." });
       void syncServerArchive({
         walletsText,
         endDate,
@@ -474,8 +471,8 @@ export default function App() {
       }).then((result) => {
         setArchiveSyncState(
           result.ok
-            ? { status: "synced", message: authSession ? "已同步到 Supabase 云端" : `已同步到数据空间 ${dataSpace}` }
-            : { status: "error", message: result.error || "服务端归档同步失败" },
+            ? { status: "synced", message: "已同步到 Supabase 云端" }
+            : { status: "error", message: result.error || "Supabase 云端归档同步失败" },
         );
       });
     }, 1200);
@@ -751,7 +748,7 @@ export default function App() {
       MAX_SCAN_HISTORY_RECORDS,
     );
 
-    setArchiveSyncState({ status: "saving", message: authSession ? "正在写入 Supabase 云端..." : "正在写入服务端归档..." });
+    setArchiveSyncState({ status: "saving", message: "正在写入 Supabase 云端..." });
     void syncServerArchive({
       walletsText,
       endDate,
@@ -765,7 +762,7 @@ export default function App() {
     }).then((result) => {
       setArchiveSyncState(
         result.ok
-          ? { status: "synced", message: authSession ? "已写入 Supabase 云端" : `已写入数据空间 ${dataSpace}` }
+          ? { status: "synced", message: "已写入 Supabase 云端" }
           : { status: "error", message: result.error || "归档写入失败" },
       );
     });
@@ -1353,8 +1350,8 @@ function WalletManagementPage({
   const pendingCount = records.filter((record) => !record.result && record.state !== "running" && record.state !== "error").length;
   const walletLineCount = walletsText.split(/\n+/).filter((line) => line.trim()).length;
   const archivedPercent = validCount > 0 ? Math.round((archivedWallets / validCount) * 100) : 0;
-  const accessCodeState = authSession ? "云端账号" : accessPassword ? "已填写" : "未填写";
-  const archiveScopeLabel = authSession ? "Supabase" : dataSpace || DEFAULT_DATA_SPACE;
+  const accessCodeState = authSession ? "云端账号" : accessPassword ? "仅用于扫描" : "未填写";
+  const archiveScopeLabel = authSession ? "Supabase" : "未登录";
   const maxWallets = Number(authSession?.user.maxWallets || 0);
   const walletQuotaExceeded = Boolean(authSession && maxWallets > 0 && validCount > maxWallets);
   const walletQuotaLabel = authSession ? `${validCount}/${maxWallets || "不限"}` : "--";
@@ -1436,12 +1433,12 @@ function WalletManagementPage({
                   placeholder="私人部署需要时填写"
                   autoComplete="current-password"
                 />
-                <small>只保存在本机浏览器。</small>
+                <small>只保存在本机浏览器；仅用于未登录时访问受保护扫描 API，不再作为云端归档来源。</small>
               </label>
 
               <label className="access-code-panel">
                 <span>
-                  <ShieldCheck size={16} /> 数据空间码
+                  <ShieldCheck size={16} /> 云端归档
                 </span>
                 <input
                   type="text"
@@ -1449,8 +1446,9 @@ function WalletManagementPage({
                   onChange={(event) => onDataSpaceChange(event.target.value)}
                   placeholder={DEFAULT_DATA_SPACE}
                   autoComplete="off"
+                  disabled
                 />
-                <small>未登录时，不同用户使用不同数据空间码；换设备时填写同一个码即可恢复同一份归档。</small>
+                <small>归档只读取 Supabase 登录账号。请登录后恢复钱包和 Boost 数据。</small>
               </label>
             </>
           )}
@@ -4055,7 +4053,7 @@ function hydrateRecordsFromServerArchive(
         state: "done",
         source: "archive",
         result: archived.result,
-        progress: "已从服务端归档恢复",
+        progress: "已从 Supabase 云端归档恢复",
         error: "",
         savedAt: archived.savedAt,
       };
@@ -4067,7 +4065,7 @@ function hydrateRecordsFromServerArchive(
         state: "done",
         source: "archive",
         result: archived.result,
-        progress: "服务端归档待刷新",
+        progress: "Supabase 云端归档待刷新",
         error: "",
         savedAt: archived.savedAt,
       };

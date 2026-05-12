@@ -73,6 +73,8 @@
   子 todo：[S33 扫描结果立即云端保存](./todos/2026-05-12-immediate-archive-save.md)
 - [x] S34 Supabase 归档读取瘦身
   子 todo：[S34 Supabase 归档读取瘦身](./todos/2026-05-12-supabase-archive-read-slim.md)
+- [x] S35 禁用私有访问码归档回退
+  子 todo：[S35 禁用私有访问码归档回退](./todos/2026-05-12-disable-access-code-archive-fallback.md)
 
 ## 维护规则
 
