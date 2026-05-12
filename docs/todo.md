@@ -67,6 +67,12 @@
   子 todo：[S30 用量限制与规模边界审查](./todos/2026-05-10-usage-limit-scale-audit.md)
 - [x] S31 规则版本化与 X Layer 接入
   子 todo：[S31 规则版本化与 X Layer 接入](./todos/2026-05-12-rule-versioning-xlayer.md)
+- [x] S32 快照日期实时默认值修复
+  子 todo：[S32 快照日期实时默认值修复](./todos/2026-05-12-snapshot-today-default.md)
+- [x] S33 扫描结果立即云端保存
+  子 todo：[S33 扫描结果立即云端保存](./todos/2026-05-12-immediate-archive-save.md)
+- [x] S34 Supabase 归档读取瘦身
+  子 todo：[S34 Supabase 归档读取瘦身](./todos/2026-05-12-supabase-archive-read-slim.md)
 
 ## 维护规则
 

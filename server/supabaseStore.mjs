@@ -440,14 +440,13 @@ async function buildArchiveFromWorkspace(env, workspace) {
     select: "id,address,name,sort_order,created_at,updated_at",
     order: "sort_order.asc,created_at.asc",
   });
-  const results = await restSelect(env, "wallet_scan_results", {
-    workspace_id: `eq.${workspace.id}`,
-    select: "wallet_address,snapshot_date,result,source,saved_at",
-    order: "snapshot_date.desc,saved_at.desc",
-    limit: String(maxResultsPerWorkspace),
-  });
-
-  const preferredDate = isUtcDate(settings.endDate) ? settings.endDate : "";
+  const preferredDate = utcDateString(new Date());
+  const results = await selectWorkspaceDisplayResults(
+    env,
+    workspace.id,
+    wallets.map((wallet) => normalizeAddress(wallet.address)).filter(isAddress),
+    preferredDate,
+  );
   const resultsByAddress = groupResultsByAddress(results);
   const records = wallets.map((wallet) => {
     const address = normalizeAddress(wallet.address);
@@ -484,6 +483,42 @@ async function buildArchiveFromWorkspace(env, workspace) {
   };
 }
 
+async function selectWorkspaceDisplayResults(env, workspaceId, walletAddresses, preferredDate) {
+  const addresses = [...new Set(walletAddresses.map(normalizeAddress).filter(isAddress))];
+  if (!addresses.length) return [];
+
+  const metadataRows = await restSelect(env, "wallet_scan_results", {
+    workspace_id: `eq.${workspaceId}`,
+    select: "id,wallet_address,snapshot_date,source,saved_at",
+    order: "snapshot_date.desc,saved_at.desc",
+    limit: String(maxResultsPerWorkspace),
+  });
+  const metadataByAddress = groupResultsByAddress(metadataRows);
+  const selectedIds = [];
+
+  for (const address of addresses) {
+    const walletRows = metadataByAddress.get(address) || [];
+    const exact = preferredDate ? walletRows.find((row) => row.snapshot_date === preferredDate) : null;
+    const selected = exact || walletRows[0] || null;
+    if (selected?.id) selectedIds.push(String(selected.id));
+  }
+
+  const ids = [...new Set(selectedIds)];
+  if (!ids.length) return [];
+
+  const rows = [];
+  for (const chunk of chunkArray(ids, 80)) {
+    rows.push(
+      ...(await restSelect(env, "wallet_scan_results", {
+        id: `in.(${chunk.join(",")})`,
+        select: "wallet_address,snapshot_date,result,source,saved_at",
+        order: "snapshot_date.desc,saved_at.desc",
+      })),
+    );
+  }
+  return rows;
+}
+
 async function syncWorkspaceWallets(env, workspaceId, entries) {
   const activeAddresses = new Set(entries.map((entry) => entry.address));
   const existing = await restSelect(env, "wallets", {
@@ -516,7 +551,7 @@ async function saveWorkspaceSettings(env, workspaceId, archive) {
   const tenDayTarget = parsePositiveNumber(archive.tenDayTarget) || defaultTenDayTarget;
   const settings = {
     walletsText: String(archive.walletsText || ""),
-    endDate: isUtcDate(archive.endDate) ? archive.endDate : "",
+    endDate: utcDateString(new Date()),
     boostOverrides: String(archive.boostOverrides || ""),
     scanHistory: Array.isArray(archive.scanHistory) ? archive.scanHistory.slice(0, maxScanHistoryRecords) : [],
     cron: isObject(archive.cron) ? archive.cron : {},
@@ -881,6 +916,14 @@ function groupResultsByAddress(results) {
     grouped.set(address, rows);
   }
   return grouped;
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function supabaseConfig(env) {

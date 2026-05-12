@@ -238,7 +238,7 @@ export default function App() {
   const maxSnapshotDate = latestSelectableUtcDate();
   const [initialUiState] = useState(readPersistedUiState);
   const initialWalletsText = initialUiState.walletsText || initialUiState.address || SAMPLE_WALLET;
-  const initialEndDate = initialUiState.endDate || maxSnapshotDate;
+  const initialEndDate = maxSnapshotDate;
   const hasPersistedWalletState = Boolean(initialUiState.walletsText || initialUiState.address);
   const [walletsText, setWalletsText] = useState(initialWalletsText);
   const [endDate, setEndDate] = useState(initialEndDate);
@@ -310,14 +310,13 @@ export default function App() {
     if (authSession) return;
     writePersistedUiState({
       walletsText,
-      endDate,
       boostOverrides,
       tenDayTarget,
       dataSpace,
       walletFilter,
       currentView,
     });
-  }, [authSession, walletsText, endDate, boostOverrides, tenDayTarget, dataSpace, walletFilter, currentView]);
+  }, [authSession, walletsText, boostOverrides, tenDayTarget, dataSpace, walletFilter, currentView]);
 
   useEffect(() => {
     writeServerAccessPassword(accessPassword);
@@ -658,8 +657,21 @@ export default function App() {
         },
       });
       const savedAt = new Date().toISOString();
-      if (!authSession) writePersistedResult(normalizedAddress, endDate, computed, savedAt);
-      appendScanHistory({
+      const successProgress =
+        typeof computed.incrementalNewTxCount === "number"
+          ? `增量刷新完成，新增 ${computed.incrementalNewTxCount} 笔 OKX 交易`
+          : "计算完成，已写入归档";
+      const successRecord: WalletArchiveRecord = {
+        address: normalizedAddress,
+        name: existingRecord?.name || walletNameByAddress.get(normalizedAddress) || "",
+        state: "done",
+        source: "fresh",
+        result: computed,
+        progress: successProgress,
+        error: "",
+        savedAt,
+      };
+      const successHistoryRecord: ScanHistoryRecord = {
         id: `${normalizedAddress}:${endDate}:${startedAt}:${mode}`,
         address: normalizedAddress,
         snapshotDate: endDate,
@@ -675,17 +687,11 @@ export default function App() {
         newTxCount: computed.incrementalNewTxCount,
         totalTxCount: computed.swaps.length,
         warningCount: visibleWarnings(computed.warnings).length,
-      });
-      patchRecord(normalizedAddress, {
-        state: "done",
-        source: "fresh",
-        result: computed,
-        savedAt,
-        progress:
-          typeof computed.incrementalNewTxCount === "number"
-            ? `增量刷新完成，新增 ${computed.incrementalNewTxCount} 笔 OKX 交易`
-            : "计算完成，已写入本地归档",
-      });
+      };
+      if (!authSession) writePersistedResult(normalizedAddress, endDate, computed, savedAt);
+      appendScanHistory(successHistoryRecord);
+      patchRecord(normalizedAddress, successRecord);
+      persistArchiveImmediately(successRecord, successHistoryRecord);
       return true;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
@@ -737,12 +743,40 @@ export default function App() {
     );
   }
 
+  function persistArchiveImmediately(updatedRecord: WalletArchiveRecord, historyRecord: ScanHistoryRecord) {
+    if (!canUseServerArchive || authWalletQuotaExceeded) return;
+    const nextRecords = buildArchiveRecordsSnapshot(records, parsedWallets.entries, updatedRecord, endDate);
+    const nextScanHistory = [historyRecord, ...scanHistory.filter((item) => item.id !== historyRecord.id)].slice(
+      0,
+      MAX_SCAN_HISTORY_RECORDS,
+    );
+
+    setArchiveSyncState({ status: "saving", message: authSession ? "正在写入 Supabase 云端..." : "正在写入服务端归档..." });
+    void syncServerArchive({
+      walletsText,
+      endDate,
+      tenDayTarget,
+      boostOverrides,
+      dataSpace,
+      records: nextRecords,
+      scanHistory: nextScanHistory,
+      accessPassword,
+      authSession,
+    }).then((result) => {
+      setArchiveSyncState(
+        result.ok
+          ? { status: "synced", message: authSession ? "已写入 Supabase 云端" : `已写入数据空间 ${dataSpace}` }
+          : { status: "error", message: result.error || "归档写入失败" },
+      );
+    });
+  }
+
   function updateBonusOverrides(value: string) {
     setBoostOverrides(value);
   }
 
   function hydrateServerArchive(archive: ServerArchivePayload) {
-    const nextEndDate = archive.endDate && isUtcDate(archive.endDate) ? archive.endDate : endDate;
+    const nextEndDate = isUtcDate(endDate) ? endDate : maxSnapshotDate;
     const nextWalletsText = mergeWalletTexts({
       localText: walletsText,
       serverText: archive.walletsText || "",
@@ -3659,6 +3693,30 @@ function syncWalletRecords(current: WalletArchiveRecord[], entries: WalletListEn
     if (existing && existing.result && existing.source === "fresh" && existing.result.windowEnd === endDate) {
       return { ...existing, name };
     }
+    return {
+      address,
+      name,
+      state: "idle",
+      source: "empty",
+      result: null,
+      progress: "等待扫描",
+      error: "",
+    };
+  });
+}
+
+function buildArchiveRecordsSnapshot(
+  current: WalletArchiveRecord[],
+  entries: WalletListEntry[],
+  updatedRecord: WalletArchiveRecord,
+  endDate: string,
+): WalletArchiveRecord[] {
+  const currentByAddress = new Map(current.map((record) => [record.address, record]));
+  currentByAddress.set(updatedRecord.address, updatedRecord);
+
+  return entries.map(({ address, name }) => {
+    const existing = currentByAddress.get(address);
+    if (existing) return { ...existing, name: name || existing.name };
     return {
       address,
       name,
