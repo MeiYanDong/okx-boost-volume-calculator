@@ -1,6 +1,8 @@
+export type ChainId = "bsc" | "xlayer";
 export type TokenGroup = "group1" | "group2" | "other";
 export type ExplorerApiStyle = "etherscan-v2" | "etherscan-legacy";
-export type TxDiscoverySource = "archive" | "import" | "ankr" | "explorer" | "rpc";
+export type TxDiscoverySource = "archive" | "import" | "ankr" | "explorer" | "rpc" | "multi-chain";
+export type BoostRuleVersion = "legacy-2026-05-11" | "current-2026-05-12";
 
 export type WalletTransaction = {
   hash: string;
@@ -11,17 +13,21 @@ export type WalletTransaction = {
 };
 
 export type ChainConfig = {
-  id: "bsc";
+  id: ChainId;
   name: string;
   chainId: number;
   etherscanChainId: number;
   rpcUrl: string;
   rpcLogChunkSize: number;
+  rpcLogFallbackEnabled?: boolean;
   explorerApiUrl: string;
   explorerApiStyle: ExplorerApiStyle;
   explorerTxUrl: string;
+  ankrBlockchain?: string;
+  chainBonusMultiplier?: number;
   okxRouters: string[];
   nativeToken: TokenMeta;
+  stableTokens: string[];
   group1: Record<string, string>;
   group2: Record<string, string>;
   defaultBoostBonuses: Record<string, number>;
@@ -45,6 +51,10 @@ export type TransferEvent = {
 
 export type ParsedSwap = {
   hash: string;
+  chainId?: ChainId;
+  chainName?: string;
+  explorerTxUrl?: string;
+  ruleVersion?: BoostRuleVersion;
   timestamp: number;
   utcDate: string;
   sender: string;
@@ -85,6 +95,16 @@ export type CalculationResult = {
   incrementalFromBlock?: number;
   incrementalNewTxCount?: number;
   txDiscoverySource?: TxDiscoverySource;
+  chainScans?: Partial<Record<ChainId, ChainScanSummary>>;
+};
+
+export type ChainScanSummary = {
+  scannedFromBlock?: number;
+  scannedToBlock?: number;
+  incrementalFromBlock?: number;
+  incrementalNewTxCount?: number;
+  txDiscoverySource?: TxDiscoverySource;
+  txHashes: string[];
 };
 
 export type CalculateInput = {

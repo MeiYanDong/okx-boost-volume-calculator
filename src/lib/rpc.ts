@@ -62,10 +62,10 @@ export class RpcClient {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload.error || payload.message || `${method} HTTP ${response.status}`);
+        throw new Error(errorMessage(payload.error || payload.message || `${method} HTTP ${response.status}`));
       }
       if (payload.error) {
-        throw new Error(payload.error.message || JSON.stringify(payload.error));
+        throw new Error(errorMessage(payload.error.message || payload.error));
       }
       return payload.result as T;
     } catch (error) {
@@ -152,6 +152,16 @@ export class RpcClient {
 
     this.tokenCache.set(normalized, token);
     return token;
+  }
+}
+
+function errorMessage(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.message;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
   }
 }
 

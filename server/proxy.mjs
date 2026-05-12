@@ -15,12 +15,14 @@ const allowedRpcMethods = new Set([
 
 export function createProxyConfig(env) {
   const rawBscRpcUrl = envValue(env, "BSC_RPC_URL", "VITE_BSC_RPC_URL");
+  const rawXLayerRpcUrl = envValue(env, "XLAYER_RPC_URL", "VITE_XLAYER_RPC_URL");
   const rawAnkrMultichainRpcUrl = normalizeAnkrRpcUrl(
     envValue(env, "ANKR_MULTICHAIN_RPC_URL", "VITE_ANKR_MULTICHAIN_RPC_URL") || deriveAnkrMultichainUrl(rawBscRpcUrl),
   );
   return {
     accessPassword: envValue(env, "ACCESS_PASSWORD"),
     bscRpcUrl: rawBscRpcUrl || deriveAnkrBscRpcUrl(rawAnkrMultichainRpcUrl) || "https://bsc-rpc.publicnode.com",
+    xlayerRpcUrl: rawXLayerRpcUrl || "https://rpc.xlayer.tech",
     ankrMultichainRpcUrl: rawAnkrMultichainRpcUrl,
     etherscanApiKey: envValue(env, "ETHERSCAN_API_KEY", "VITE_ETHERSCAN_API_KEY"),
     etherscanApiUrl: "https://api.etherscan.io/v2/api",
@@ -42,7 +44,9 @@ export async function handleRpcProxy(request, response, config, env = process.en
   await validateServiceAccess(request, config, env);
   const body = await readJsonBody(request);
   validateRpcBody(body);
-  const payload = await postJson(config.bscRpcUrl, body);
+  const chain = rpcProxyChain(requestUrl(request));
+  const upstreamUrl = chain === "xlayer" ? config.xlayerRpcUrl : config.bscRpcUrl;
+  const payload = await postJson(upstreamUrl, body);
   sendJson(response, 200, payload, { "cache-control": "no-store" });
 }
 
@@ -277,6 +281,12 @@ function validateRpcBody(body) {
   }
 }
 
+function rpcProxyChain(url) {
+  const chain = (url.searchParams.get("chain") || "bsc").toLowerCase();
+  if (chain === "bsc" || chain === "xlayer") return chain;
+  throw new Error(`RPC chain is not allowed: ${chain}`);
+}
+
 function validateAnkrBody(body) {
   if (!isObject(body) || body.jsonrpc !== "2.0" || body.method !== "ankr_getTransactionsByAddress") {
     throw new Error("Only ankr_getTransactionsByAddress is allowed");
@@ -284,7 +294,7 @@ function validateAnkrBody(body) {
   const params = body.params;
   if (!isObject(params)) throw new Error("Invalid Ankr params");
   if (!isAddress(params.address)) throw new Error("Invalid Ankr address");
-  if (params.blockchain !== "bsc") throw new Error("Only BSC Ankr queries are allowed");
+  if (!["bsc", "xlayer"].includes(params.blockchain)) throw new Error("Only BSC and X Layer Ankr queries are allowed");
   if (params.includeLogs !== false) throw new Error("Ankr includeLogs must be false");
   if (!Number.isFinite(Number(params.pageSize)) || Number(params.pageSize) > 100) {
     throw new Error("Ankr pageSize is too large");
@@ -416,6 +426,7 @@ function redact(value, config) {
   let output = String(value);
   for (const secret of [
     config.bscRpcUrl,
+    config.xlayerRpcUrl,
     config.ankrMultichainRpcUrl,
     config.etherscanApiKey,
     config.accessPassword,

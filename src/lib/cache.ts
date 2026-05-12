@@ -1,7 +1,8 @@
 import { normalizeAddress } from "./chains";
+import { BOOST_RULE_CACHE_VERSION } from "./boostRules";
 import type { ChainConfig, ParsedSwap } from "./types";
 
-const CACHE_PREFIX = "okx-boost:v4";
+const CACHE_PREFIX = "okx-boost:v5";
 const TX_HASHES_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PARSED_SWAP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -38,6 +39,7 @@ export function parsedSwapCacheKey(params: {
     params.chain.id,
     normalizeAddress(params.address),
     normalizeAddress(params.hash),
+    BOOST_RULE_CACHE_VERSION,
     boostBonusSignature(params.boostBonuses),
   ].join(":");
 }

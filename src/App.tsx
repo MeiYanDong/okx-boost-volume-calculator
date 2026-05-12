@@ -27,8 +27,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { BSC_CHAIN, isAddress, normalizeAddress } from "./lib/chains";
-import { buildUtcWindow, calculateBoostVolume, latestSelectableUtcDate } from "./lib/calculator";
+import { CHAINS, chainById, isAddress, normalizeAddress } from "./lib/chains";
+import { buildUtcWindow, calculateBoostVolumeAcrossChains, latestSelectableUtcDate } from "./lib/calculator";
 import { formatNumber, formatUsd, shortHash } from "./lib/format";
 import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPassword } from "./lib/serverAccess";
 import {
@@ -643,10 +643,10 @@ export default function App() {
     const startedAt = new Date(startedAtMs).toISOString();
 
     try {
-      const computed = await calculateBoostVolume({
+      const computed = await calculateBoostVolumeAcrossChains({
         address: normalizedAddress,
         endDate,
-        chain: BSC_CHAIN,
+        chains: CHAINS,
         apiKey: SERVER_MANAGED_EXPLORER_API_KEY,
         ankrMultichainRpcUrl: SERVER_MANAGED_ANKR_RPC_URL,
         boostBonuses: {},
@@ -3149,7 +3149,7 @@ function WalletDetailDrawer({
                     {result.swaps.map((swap) => (
                       <tr key={swap.hash}>
                         <td>
-                          <a href={`${BSC_CHAIN.explorerTxUrl}${swap.hash}`} target="_blank" rel="noreferrer">
+                          <a href={`${explorerTxUrlForSwap(swap)}${swap.hash}`} target="_blank" rel="noreferrer">
                             {shortHash(swap.hash)}
                             <ExternalLink size={13} />
                           </a>
@@ -3160,6 +3160,7 @@ function WalletDetailDrawer({
                         </td>
                         <td>
                           {swap.inputToken.symbol} → {swap.outputToken.symbol}
+                          <small>{swap.chainName || chainById(swap.chainId).name}</small>
                         </td>
                         <td>
                           {formatUsd(swap.tradeUsd, true)}
@@ -3690,7 +3691,8 @@ function updateWalletNameInText(raw: string, address: string, nextNameRaw: strin
 function scopedBonusMultiplierForSwap(swap: ParsedSwap, rules: ScopedBonusRules, wallet: string): number {
   const inputBonus = scopedBonusFor(rules, wallet, swap.utcDate, swap.inputToken.address);
   const outputBonus = scopedBonusFor(rules, wallet, swap.utcDate, swap.outputToken.address);
-  return Math.max(inputBonus, outputBonus, 1);
+  const chainBonus = chainById(swap.chainId).chainBonusMultiplier || 1;
+  return Math.max(inputBonus, outputBonus, 1) * chainBonus;
 }
 
 function scopedBonusFor(rules: ScopedBonusRules, wallet: string, date: string, address: string): number {
@@ -3700,6 +3702,10 @@ function scopedBonusFor(rules: ScopedBonusRules, wallet: string, date: string, a
 
 function scopedBonusKey(wallet: string, date: string, address: string): string {
   return [normalizeAddress(wallet), date, normalizeAddress(address)].join("|");
+}
+
+function explorerTxUrlForSwap(swap: ParsedSwap): string {
+  return swap.explorerTxUrl || chainById(swap.chainId).explorerTxUrl;
 }
 
 function parseScopedBonusRules(raw: string): ScopedBonusRules {
@@ -3856,7 +3862,7 @@ function viewMetaFor(view: AppView, targetTotal: number | null): { title: string
   }
   return {
     title: "OKX Boost 钱包总览",
-    subtitle: "BNB Chain · 最近 10 天 Boost 交易归档",
+    subtitle: "BNB Chain + X Layer · 最近 10 天 Boost 交易归档",
   };
 }
 
@@ -3864,6 +3870,7 @@ function discoverySourceLabel(source: CalculationResult["txDiscoverySource"]): s
   if (source === "ankr") return "Ankr 索引";
   if (source === "explorer") return "Explorer 索引";
   if (source === "rpc") return "RPC 兜底";
+  if (source === "multi-chain") return "多链合并";
   if (source === "import") return "导入记录";
   if (source === "archive") return "本地归档";
   return "已归档";

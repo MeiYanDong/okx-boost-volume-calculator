@@ -1,5 +1,5 @@
-import { BSC_CHAIN, isAddress, normalizeAddress } from "../src/lib/chains";
-import { buildUtcWindow, calculateBoostVolume } from "../src/lib/calculator";
+import { BSC_CHAIN, CHAINS, chainById, isAddress, normalizeAddress } from "../src/lib/chains";
+import { buildUtcWindow, calculateBoostVolumeAcrossChains } from "../src/lib/calculator";
 import { formatUsd } from "../src/lib/format";
 import type { CalculationResult, ChainConfig, ParsedSwap } from "../src/lib/types";
 
@@ -11,6 +11,7 @@ const SNAPSHOT_CONFIRM_TIME_LABEL = "08:00";
 
 type ProxyConfig = {
   bscRpcUrl?: string;
+  xlayerRpcUrl?: string;
   ankrMultichainRpcUrl?: string;
   etherscanApiKey?: string;
   etherscanApiUrl?: string;
@@ -101,7 +102,7 @@ export async function runDailyRefresh(params: {
   const targetTotal = parseOptionalAmount(archive.tenDayTarget) || DEFAULT_TEN_DAY_TARGET;
   const entries = walletEntriesForArchive(archive);
   const previousByAddress = new Map((archive.records || []).map((record) => [normalizeAddress(record.address), record]));
-  const chain = buildServerChain(params.config);
+  const chains = buildServerChains(params.config);
   const nextRecords: ServerArchiveRecord[] = [];
   const failures: Array<{ address: string; name: string; error: string }> = [];
   const scanHistory = Array.isArray(archive.scanHistory) ? [...archive.scanHistory] : [];
@@ -111,11 +112,10 @@ export async function runDailyRefresh(params: {
     const startedAtMs = Date.now();
     params.onProgress?.(`刷新 ${entry.name || entry.address} ${snapshotDate}`);
     try {
-      const result = await calculateBoostVolume({
+      const result = await calculateBoostVolumeAcrossChains({
         address: entry.address,
         endDate: snapshotDate,
-        chain,
-        rpcUrl: params.config.bscRpcUrl,
+        chains,
         ankrMultichainRpcUrl: params.config.ankrMultichainRpcUrl,
         apiKey: params.config.etherscanApiKey,
         boostBonuses: {},
@@ -214,12 +214,23 @@ export function cronSnapshotDate(now: Date): string {
     .slice(0, 10);
 }
 
-function buildServerChain(config: ProxyConfig): ChainConfig {
-  return {
-    ...BSC_CHAIN,
-    rpcUrl: config.bscRpcUrl || BSC_CHAIN.rpcUrl,
-    explorerApiUrl: config.etherscanApiUrl || BSC_CHAIN.explorerApiUrl,
-  };
+function buildServerChains(config: ProxyConfig): ChainConfig[] {
+  return CHAINS.map((chain) => {
+    if (chain.id === "bsc") {
+      return {
+        ...BSC_CHAIN,
+        rpcUrl: config.bscRpcUrl || BSC_CHAIN.rpcUrl,
+        explorerApiUrl: config.etherscanApiUrl || BSC_CHAIN.explorerApiUrl,
+      };
+    }
+    if (chain.id === "xlayer") {
+      return {
+        ...chain,
+        rpcUrl: config.xlayerRpcUrl || chain.rpcUrl,
+      };
+    }
+    return chain;
+  });
 }
 
 function walletEntriesForArchive(archive: ServerArchive): WalletListEntry[] {
@@ -469,7 +480,8 @@ function applyBonusRules(result: CalculationResult, bonusRules: string, walletAd
 function scopedBonusMultiplierForSwap(swap: ParsedSwap, rules: ScopedBonusRules, wallet: string): number {
   const inputBonus = scopedBonusFor(rules, wallet, swap.utcDate, swap.inputToken.address);
   const outputBonus = scopedBonusFor(rules, wallet, swap.utcDate, swap.outputToken.address);
-  return Math.max(inputBonus, outputBonus, 1);
+  const chainBonus = chainById(swap.chainId).chainBonusMultiplier || 1;
+  return Math.max(inputBonus, outputBonus, 1) * chainBonus;
 }
 
 function scopedBonusFor(rules: ScopedBonusRules, wallet: string, date: string, address: string): number {

@@ -65,6 +65,8 @@
   子 todo：[S29 会话与快照窗口审查](./todos/2026-05-10-session-window-audit.md)
 - [x] S30 用量限制与规模边界审查
   子 todo：[S30 用量限制与规模边界审查](./todos/2026-05-10-usage-limit-scale-audit.md)
+- [x] S31 规则版本化与 X Layer 接入
+  子 todo：[S31 规则版本化与 X Layer 接入](./todos/2026-05-12-rule-versioning-xlayer.md)
 
 ## 维护规则
 

@@ -36,6 +36,9 @@ export async function fetchAnkrAddressOkxHashes(params: {
   endSeconds: number;
   onProgress?: (message: string) => void;
 }): Promise<string[]> {
+  if (!params.chain.ankrBlockchain) {
+    throw new Error(`Ankr Advanced API is not configured for ${params.chain.name}`);
+  }
   const address = normalizeAddress(params.address);
   const routers = new Set(params.chain.okxRouters);
   const hashes = new Set<string>();
@@ -45,6 +48,7 @@ export async function fetchAnkrAddressOkxHashes(params: {
     params.onProgress?.(`通过 Ankr Advanced API 读取钱包交易 ${page}/${MAX_PAGES}...`);
     const payload = await fetchAnkrPage({
       rpcUrl: params.rpcUrl,
+      blockchain: params.chain.ankrBlockchain,
       address,
       endSeconds: params.endSeconds,
       pageToken,
@@ -81,6 +85,7 @@ export async function fetchAnkrAddressOkxHashes(params: {
 
 async function fetchAnkrPage(params: {
   rpcUrl: string;
+  blockchain: string;
   address: string;
   endSeconds: number;
   pageToken?: string;
@@ -88,7 +93,7 @@ async function fetchAnkrPage(params: {
   const url = ankrMethodUrl(params.rpcUrl);
   const requestParams: Record<string, string | number | boolean> = {
     address: params.address,
-    blockchain: "bsc",
+    blockchain: params.blockchain,
     descOrder: true,
     includeLogs: false,
     pageSize: PAGE_SIZE,

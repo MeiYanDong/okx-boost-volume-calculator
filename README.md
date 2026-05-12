@@ -1,6 +1,6 @@
 # OKX Boost 钱包总览工具
 
-这个项目用来帮你计算 BNB Chain 上的 OKX Boost 交易量。
+这个项目用来帮你计算 BNB Chain 和 X Layer 上的 OKX Boost 交易量。
 
 它不是给技术同学看的区块链脚本，而是给正在参加 OKX Boost 活动的人用的工作台：你把钱包地址、快照日期和代币加成规则告诉 Agent，Agent 把项目跑起来，页面会帮你看到所有钱包最近 10 天的 Boost 情况。
 
@@ -22,7 +22,7 @@ OKX Boost 的计算对新手不友好，主要有几个坑：
 
 1. 统计窗口是“快照日期往前 10 天”，而且快照日期当天包含在内。
 2. 今天还没结束时，结果只能是实时预估，后面继续交易会改变结果。
-3. 一个钱包可能有很多交易，但只有 BNB Chain 上打到 OKX DEX Router 的交易才属于当前工具统计范围。
+3. 一个钱包可能有很多交易，但只有 BNB Chain / X Layer 上打到 OKX DEX Router 的交易才属于当前工具统计范围。
 4. 同一个代币，不同日期可能有不同加成；不同钱包刷同一个代币，也应该分别设置。
 5. 钱包多了以后，如果每次都重新扫完整 10 天，会很慢，也浪费 RPC / Ankr 额度。
 
@@ -31,10 +31,10 @@ OKX Boost 的计算对新手不友好，主要有几个坑：
 这个工具把工作拆成两层：
 
 1. **交易发现**
-   优先用 Ankr 钱包索引快速找到 OKX 交易 hash；如果 Ankr 不可用，再尝试 Explorer；最后才用 Chainstack/RPC 读取公开 Transfer 事件兜底。
+   优先用 Ankr 钱包索引快速找到 BNB Chain / X Layer 的 OKX 交易 hash；BNB Chain 如果 Ankr 不可用，再尝试 Explorer 和 Chainstack/RPC 兜底。X Layer 不用公共 RPC 扫日志兜底，因为公共节点通常限制 `eth_getLogs` 区间，不适合扫 10 天窗口。
 
 2. **交易解析**
-   用 BNB Chain RPC 读取交易、receipt、token 信息，计算基础倍数、成交额和 Boost 交易量。
+   用对应链的 RPC 读取交易、receipt、token 信息，计算基础倍数、成交额和 Boost 交易量。
 
 当前工作台支持：
 
@@ -54,7 +54,7 @@ OKX Boost 的计算对新手不友好，主要有几个坑：
 - 每个钱包、每个日期、每个代币单独设置额外加成
 - 快照预警支持一键发送账号级飞书群机器人提醒
 - Vercel 私人部署支持每天自动增量刷新，并在未来快照低于目标时按用户配置自动飞书提醒
-- 交易发现来源展示：`Ankr 索引`、`Explorer 索引`、`RPC 兜底`、`本地归档`
+- 交易发现来源展示：`Ankr 索引`、`Explorer 索引`、`RPC 兜底`、`多链合并`、`本地归档`
 
 ## 结果
 
@@ -96,7 +96,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 1. 把项目拉到本地。
 2. 安装依赖并启动本地网页。
 3. 配置服务端数据源，不要把密钥暴露到前端页面，也不要提交密钥文件。
-4. 优先配置 Ankr 钱包索引用来发现交易；配置 BNB Chain RPC 用来解析交易。
+4. 优先配置 Ankr 钱包索引用来发现 BNB Chain 和 X Layer 交易；配置 BNB Chain RPC 用来解析 BNB Chain 交易，X Layer 可使用默认公共 RPC 或私有 `XLAYER_RPC_URL`。
 5. 如果我要跨部署保存数据，请优先配置 Supabase 邀请制账号；旧版本也可以继续用 Vercel Upstash Redis。
 6. 如果我要飞书提醒，请帮我登录后在偏好设置里保存飞书自定义机器人 Webhook；如果机器人开启签名，也保存签名密钥。
 7. 打开本地页面，导入我的钱包地址。
@@ -105,7 +105,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 10. 打开钱包详情，按我提供的规则填写代币额外加成。
 11. 最后告诉我：10 日合计 Boost、10 日平均 Boost、今日 Boost、还差多少、未来 3 次快照是否有风险、使用了什么数据来源、有没有警告。
 
-注意：当前工具只统计 BNB Chain 上的 OKX DEX Router 交易。不要把 Base、Arbitrum、Solana 或其他链的交易算进去。
+注意：当前工具统计 BNB Chain 和 X Layer 上的 OKX DEX Router 交易。不要把 Base、Arbitrum、Solana 或其他暂未接入链的交易算进去。
 ```
 
 然后补充你的信息：
@@ -130,7 +130,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 
 请先阅读 docs/vercel-private-deploy.md，然后完成：
 1. 检查 Vercel 项目是否已关联正确仓库。
-2. 在 Vercel 环境变量里配置 Ankr、BNB Chain RPC、访问密码等服务端变量。
+2. 在 Vercel 环境变量里配置 Ankr、BNB Chain RPC、X Layer RPC、访问密码等服务端变量。
 3. 配置 Vercel Upstash Redis，用来保存钱包列表、扫描结果、加成规则和自动刷新状态。
 4. 如果我要多用户账号隔离，请配置 Supabase：SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、SUPABASE_SECRET_KEY，并实际验证 /api/auth?action=me 返回 configured: true。
 5. 配置 CRON_SECRET，用来保护每日自动刷新接口。
@@ -256,8 +256,9 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 最理想配置是：
 
 ```text
-Ankr：负责找交易
-Chainstack：负责解析交易和 RPC 兜底
+Ankr：负责在 BNB Chain 和 X Layer 上按钱包找交易
+Chainstack：负责解析 BNB Chain 交易和 BNB Chain RPC 兜底
+X Layer RPC：负责解析 X Layer 交易；交易发现仍优先走 Ankr
 ```
 
 ## 当前边界
@@ -265,7 +266,7 @@ Chainstack：负责解析交易和 RPC 兜底
 当前版本只统计：
 
 ```text
-BNB Chain 上的 OKX DEX Router 交易
+BNB Chain / X Layer 上的 OKX DEX Router 交易
 ```
 
 当前版本暂不统计：

@@ -61,6 +61,8 @@
 
 ## 当前边界
 
-当前版本只统计 BNB Chain 的 OKX DEX Router 交易。
+当前版本统计 BNB Chain 和 X Layer 的 OKX DEX Router 交易。
 
 Base、Arbitrum、Solana 和其他链暂不纳入本版本。
+
+规则变化必须按交易时间版本化处理：旧交易继续使用旧规则，新交易使用新规则，不能因为代码更新把历史交易整体改用最新规则重算。

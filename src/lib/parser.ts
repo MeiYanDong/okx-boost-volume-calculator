@@ -1,4 +1,4 @@
-import { baseMultiplierFor, bonusMultiplierFor, tradeUsdFromStableLeg } from "./boostRules";
+import { baseMultiplierFor, bonusMultiplierFor, boostRuleVersionForTimestamp, tradeUsdFromStableLeg } from "./boostRules";
 import { formatUnitsNumber, toUtcDate } from "./format";
 import { normalizeAddress, ZERO_NATIVE } from "./chains";
 import { RpcClient, type RpcLog, type RpcReceipt, type RpcTransaction } from "./rpc";
@@ -43,18 +43,24 @@ export async function parseOkxSwap(params: {
   const outputAmount = formatUnitsNumber(output.value, output.token.decimals);
   const feeAmount = inferFeeAmount(transfers, output.token, router, user);
   const { tradeUsd, usdBasis } = tradeUsdFromStableLeg({
+    chain: params.chain,
     inputToken: input.token,
     outputToken: output.token,
     inputAmount,
     outputAmount,
   });
-  const baseMultiplier = baseMultiplierFor(input.token, output.token);
-  const bonusMultiplier = bonusMultiplierFor(input.token, output.token, params.boostBonuses);
+  const ruleVersion = boostRuleVersionForTimestamp(timestamp);
+  const baseMultiplier = baseMultiplierFor(input.token, output.token, timestamp);
+  const bonusMultiplier = bonusMultiplierFor(params.chain, input.token, output.token, params.boostBonuses);
   const boostVolume = tradeUsd === undefined ? 0 : tradeUsd * baseMultiplier * bonusMultiplier;
   const status = tradeUsd === undefined ? "partial" : baseMultiplier === 0 ? "excluded" : "counted";
 
   return {
     hash: params.hash,
+    chainId: params.chain.id,
+    chainName: params.chain.name,
+    explorerTxUrl: params.chain.explorerTxUrl,
+    ruleVersion,
     timestamp,
     utcDate: toUtcDate(timestamp),
     sender: normalizeAddress(tx.from),
@@ -70,7 +76,7 @@ export async function parseOkxSwap(params: {
     bonusMultiplier,
     boostVolume,
     status,
-    reason: status === "excluded" ? "Pair is excluded by Boost token-group rules" : undefined,
+    reason: status === "excluded" ? "Pair is excluded by current Boost token-group rules" : undefined,
   };
 }
 
@@ -199,6 +205,10 @@ function fallbackSwap(
 ): ParsedSwap {
   return {
     hash: tx.hash,
+    chainId: chain.id,
+    chainName: chain.name,
+    explorerTxUrl: chain.explorerTxUrl,
+    ruleVersion: boostRuleVersionForTimestamp(timestamp),
     timestamp,
     utcDate: toUtcDate(timestamp),
     sender: normalizeAddress(userAddress),

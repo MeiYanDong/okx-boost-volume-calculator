@@ -1,6 +1,13 @@
-import type { ChainConfig, TokenGroup, TokenMeta } from "./types";
+import type { ChainConfig, ChainId, TokenGroup, TokenMeta } from "./types";
 
 export const ZERO_NATIVE = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+const BSC_STABLE_TOKENS = [
+  "0x55d398326f99059ff775485246999027b3197955",
+  "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+  "0x4fabb145d64652a948d72533023f6e7a623c7c53",
+  "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409",
+];
 
 export const BSC_CHAIN: ChainConfig = {
   id: "bsc",
@@ -9,9 +16,11 @@ export const BSC_CHAIN: ChainConfig = {
   etherscanChainId: 56,
   rpcUrl: "/api/rpc",
   rpcLogChunkSize: 10_000,
+  rpcLogFallbackEnabled: true,
   explorerApiUrl: "/api/explorer",
   explorerApiStyle: "etherscan-v2",
   explorerTxUrl: "https://bscscan.com/tx/",
+  ankrBlockchain: "bsc",
   okxRouters: [
     "0x62ccef0b4545166f721caa9fee13c1d3767e27dc",
     "0x5cb43bae4f36e2f9f858232b4dce0dbe27bb85e3",
@@ -23,6 +32,7 @@ export const BSC_CHAIN: ChainConfig = {
     decimals: 18,
     group: "group1",
   },
+  stableTokens: BSC_STABLE_TOKENS,
   group1: {
     "0x55d398326f99059ff775485246999027b3197955": "USDT",
     "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": "USDC",
@@ -41,14 +51,40 @@ export const BSC_CHAIN: ChainConfig = {
   defaultBoostBonuses: {},
 };
 
-export const CHAINS = [BSC_CHAIN];
+export const X_LAYER_CHAIN: ChainConfig = {
+  id: "xlayer",
+  name: "X Layer",
+  chainId: 196,
+  etherscanChainId: 196,
+  rpcUrl: "/api/rpc?chain=xlayer",
+  rpcLogChunkSize: 100,
+  rpcLogFallbackEnabled: false,
+  explorerApiUrl: "",
+  explorerApiStyle: "etherscan-v2",
+  explorerTxUrl: "https://www.okx.com/web3/explorer/xlayer/tx/",
+  ankrBlockchain: "xlayer",
+  chainBonusMultiplier: 1.2,
+  okxRouters: [
+    "0x722db4f285f8bd91ef7af6da397e83f7fa4e80a7",
+  ],
+  nativeToken: {
+    address: ZERO_NATIVE,
+    symbol: "OKB",
+    name: "OKB",
+    decimals: 18,
+    group: "other",
+  },
+  stableTokens: [
+    "0x779ded0c9e1022225f8e0630b35a9b54be713736",
+  ],
+  group1: {
+    "0x779ded0c9e1022225f8e0630b35a9b54be713736": "USDt0",
+  },
+  group2: {},
+  defaultBoostBonuses: {},
+};
 
-const STABLES = new Set([
-  "0x55d398326f99059ff775485246999027b3197955",
-  "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
-  "0x4fabb145d64652a948d72533023f6e7a623c7c53",
-  "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409",
-]);
+export const CHAINS = [BSC_CHAIN, X_LAYER_CHAIN];
 
 export function normalizeAddress(value: string): string {
   return value.trim().toLowerCase();
@@ -58,8 +94,8 @@ export function isAddress(value: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
 }
 
-export function isStableToken(address: string): boolean {
-  return STABLES.has(normalizeAddress(address));
+export function isStableToken(chain: ChainConfig, address: string): boolean {
+  return chain.stableTokens.map(normalizeAddress).includes(normalizeAddress(address));
 }
 
 export function tokenGroup(chain: ChainConfig, address: string): TokenGroup {
@@ -81,4 +117,8 @@ export function withTokenGroup(chain: ChainConfig, token: Omit<TokenMeta, "group
     address: normalizeAddress(token.address),
     group: tokenGroup(chain, token.address),
   };
+}
+
+export function chainById(chainId: ChainId | undefined): ChainConfig {
+  return CHAINS.find((chain) => chain.id === chainId) || BSC_CHAIN;
 }

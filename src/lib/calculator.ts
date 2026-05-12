@@ -13,10 +13,114 @@ import { fetchAddressOkxHashes } from "./explorer";
 import { parseOkxSwap } from "./parser";
 import { RpcClient } from "./rpc";
 import { fetchWalletOkxHashesByRpc } from "./rpcScan";
-import type { CalculateInput, CalculationResult, ChainConfig, DailyBoostRow, TxDiscoverySource, WalletTransaction } from "./types";
+import type {
+  CalculateInput,
+  CalculationResult,
+  ChainConfig,
+  ChainId,
+  ChainScanSummary,
+  DailyBoostRow,
+  TxDiscoverySource,
+  WalletTransaction,
+} from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_REORG_SAFETY_BLOCKS = 200;
+
+export type MultiChainCalculateInput = Omit<CalculateInput, "chain" | "previousResult" | "rpcUrl"> & {
+  chains: ChainConfig[];
+  previousResult?: CalculationResult;
+};
+
+export async function calculateBoostVolumeAcrossChains(input: MultiChainCalculateInput): Promise<CalculationResult> {
+  const chains = input.chains.length ? input.chains : [];
+  if (!chains.length) throw new Error("No chain configured");
+
+  const settled = await Promise.all(
+    chains.map(async (chain) => {
+      try {
+        return {
+          chain,
+          result: await calculateBoostVolume({
+            ...input,
+            chain,
+            previousResult: previousResultForChain(input.previousResult, chain.id),
+            onProgress: (message) => input.onProgress?.(`${chain.name}: ${message}`),
+          }),
+        };
+      } catch (error) {
+        return {
+          chain,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
+
+  const successful = settled.filter((item): item is { chain: ChainConfig; result: CalculationResult } => "result" in item);
+  const failed = settled.filter((item): item is { chain: ChainConfig; error: string } => "error" in item);
+  if (!successful.length) {
+    throw new Error(failed.map((item) => `${item.chain.name}: ${item.error}`).join("\n") || "No chain scan succeeded");
+  }
+
+  const { days } = buildUtcWindow(input.endDate);
+  const dailyRows = days.map<DailyBoostRow>((date) => ({
+    date,
+    txCount: 0,
+    boostVolume: 0,
+    tradeUsd: 0,
+  }));
+  const dailyMap = new Map(dailyRows.map((row) => [row.date, row]));
+  const swaps = successful.flatMap((item) => item.result.swaps);
+  for (const swap of swaps) {
+    const row = dailyMap.get(swap.utcDate);
+    if (!row) continue;
+    row.txCount += swap.status === "counted" ? 1 : 0;
+    row.boostVolume += swap.boostVolume;
+    row.tradeUsd += swap.tradeUsd || 0;
+  }
+
+  const chainScans: Partial<Record<ChainId, ChainScanSummary>> = {};
+  for (const { chain, result } of successful) {
+    const scan = result.chainScans?.[chain.id];
+    chainScans[chain.id] = scan || {
+      scannedFromBlock: result.scannedFromBlock,
+      scannedToBlock: result.scannedToBlock,
+      incrementalFromBlock: result.incrementalFromBlock,
+      incrementalNewTxCount: result.incrementalNewTxCount,
+      txDiscoverySource: result.txDiscoverySource,
+      txHashes: result.txHashes,
+    };
+  }
+
+  const totalBoostVolume = dailyRows.reduce((sum, row) => sum + row.boostVolume, 0);
+  const totalTradeUsd = dailyRows.reduce((sum, row) => sum + row.tradeUsd, 0);
+  const primaryScan = chainScans.bsc || Object.values(chainScans)[0];
+  const incrementalCounts = Object.values(chainScans)
+    .map((scan) => scan?.incrementalNewTxCount)
+    .filter((value): value is number => typeof value === "number");
+
+  return {
+    windowStart: days[0],
+    windowEnd: days[days.length - 1],
+    averageBoostVolume: totalBoostVolume / 10,
+    totalBoostVolume,
+    totalTradeUsd,
+    dailyRows: [...dailyRows].reverse(),
+    swaps: dedupeSwaps(swaps).sort((a, b) => b.timestamp - a.timestamp),
+    warnings: [
+      ...successful.flatMap((item) => item.result.warnings),
+      ...failed.map((item) => `${item.chain.name} 扫描失败：${item.error}`),
+    ],
+    txHashes: successful.flatMap((item) => item.result.txHashes.map((hash) => `${item.chain.id}:${hash}`)),
+    scannedFromBlock: primaryScan?.scannedFromBlock,
+    scannedToBlock: primaryScan?.scannedToBlock,
+    incrementalFromBlock: primaryScan?.incrementalFromBlock,
+    incrementalNewTxCount: incrementalCounts.length ? incrementalCounts.reduce((sum, value) => sum + value, 0) : undefined,
+    txDiscoverySource: successful.length > 1 ? "multi-chain" : successful[0].result.txDiscoverySource,
+    chainScans,
+  };
+}
 
 export async function calculateBoostVolume(input: CalculateInput): Promise<CalculationResult> {
   if (!isAddress(input.address)) {
@@ -181,6 +285,34 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     incrementalFromBlock: canIncrementalRefresh ? scanStartBlock : undefined,
     incrementalNewTxCount: canIncrementalRefresh ? txHashesToParse.length : undefined,
     txDiscoverySource: discovery.source,
+    chainScans: {
+      [input.chain.id]: {
+        scannedFromBlock: startBlock,
+        scannedToBlock: endBlock,
+        incrementalFromBlock: canIncrementalRefresh ? scanStartBlock : undefined,
+        incrementalNewTxCount: canIncrementalRefresh ? txHashesToParse.length : undefined,
+        txDiscoverySource: discovery.source,
+        txHashes,
+      },
+    },
+  };
+}
+
+function previousResultForChain(previousResult: CalculationResult | undefined, chainId: ChainId): CalculationResult | undefined {
+  if (!previousResult) return undefined;
+  const scan = previousResult.chainScans?.[chainId];
+  const swaps = previousResult.swaps.filter((swap) => (swap.chainId || "bsc") === chainId);
+  if (!scan && !swaps.length && chainId !== "bsc") return undefined;
+  return {
+    ...previousResult,
+    swaps,
+    txHashes: scan?.txHashes || swaps.map((swap) => swap.hash),
+    scannedFromBlock: scan?.scannedFromBlock ?? (chainId === "bsc" ? previousResult.scannedFromBlock : undefined),
+    scannedToBlock: scan?.scannedToBlock ?? (chainId === "bsc" ? previousResult.scannedToBlock : undefined),
+    incrementalFromBlock: scan?.incrementalFromBlock,
+    incrementalNewTxCount: scan?.incrementalNewTxCount,
+    txDiscoverySource: scan?.txDiscoverySource ?? previousResult.txDiscoverySource,
+    chainScans: scan ? { [chainId]: scan } : undefined,
   };
 }
 
@@ -237,7 +369,7 @@ async function discoverOkxHashes(params: {
     return { hashes, source: "import" };
   }
 
-  if (params.input.ankrMultichainRpcUrl) {
+  if (params.input.ankrMultichainRpcUrl && params.input.chain.ankrBlockchain) {
     try {
       params.input.onProgress?.(
         `通过 Ankr Advanced 钱包索引筛选 OKX Router 交易，区块 ${params.startBlock}-${params.endBlock}...`,
@@ -263,7 +395,7 @@ async function discoverOkxHashes(params: {
     }
   }
 
-  if (params.input.apiKey) {
+  if (params.input.apiKey && params.input.chain.explorerApiUrl) {
     try {
       params.input.onProgress?.(
         `通过 Explorer 钱包交易索引筛选 OKX Router 交易，区块 ${params.startBlock}-${params.endBlock}...`,
@@ -285,6 +417,9 @@ async function discoverOkxHashes(params: {
   }
 
   try {
+    if (params.input.chain.rpcLogFallbackEnabled === false) {
+      throw new Error(`${params.input.chain.name} requires Ankr Advanced wallet index; RPC log fallback is disabled for this chain.`);
+    }
     params.input.onProgress?.(
       `RPC 兜底：读取公开链上 Transfer 事件，区块 ${params.startBlock}-${params.endBlock}...`,
     );

@@ -21,6 +21,7 @@
 | --- | --- | --- |
 | `ANKR_MULTICHAIN_RPC_URL` | Ankr Advanced 钱包交易索引，用来快速发现钱包 OKX 交易 hash | 优先配置 |
 | `BSC_RPC_URL` | BNB Chain 标准 RPC，用来查区块、交易、receipt、logs、token 信息 | 建议用 Chainstack |
+| `XLAYER_RPC_URL` | X Layer 标准 RPC，用来解析 X Layer 交易、receipt 和 token 信息 | 可选，默认 `https://rpc.xlayer.tech` |
 | `ETHERSCAN_API_KEY` | Explorer 钱包交易索引备选 | 可选；免费计划可能不支持 BSC |
 | `ACCESS_PASSWORD` | 私人访问码，保护未登录旧路径的 API 额度和首个管理员初始化 | 私人部署必须配置 |
 | `CRON_SECRET` | 保护 Vercel Cron 自动刷新接口 | 私人部署必须配置 |
@@ -33,8 +34,9 @@
 推荐链路：
 
 ```text
-Ankr：负责找交易
-Chainstack：负责解析交易和 RPC 兜底
+Ankr：负责在 BNB Chain 和 X Layer 上按钱包找交易
+Chainstack：负责解析 BNB Chain 交易和 BNB Chain RPC 兜底
+X Layer RPC：负责解析 X Layer 交易；交易发现仍优先走 Ankr
 Explorer：备选索引，不作为主依赖
 ```
 
@@ -99,9 +101,9 @@ Explorer：备选索引，不作为主依赖
 
 ### 为什么有 Chainstack 还要 Ankr？
 
-Chainstack 是标准 RPC，适合解析交易和兜底扫 logs；Ankr Advanced 提供钱包交易索引，适合快速找到某个钱包的交易 hash。
+Chainstack 是标准 RPC，适合解析 BNB Chain 交易和兜底扫 logs；Ankr Advanced 提供钱包交易索引，适合快速找到某个钱包在 BNB Chain 和 X Layer 的交易 hash。
 
-两者不是二选一。最优组合是 Ankr 找交易，Chainstack 解析交易。
+两者不是二选一。最优组合是 Ankr 找交易，标准 RPC 解析交易。X Layer 公共 RPC 对 `eth_getLogs` 区间限制较小，所以不把它作为 10 天钱包扫链兜底。
 
 ### 为什么 Explorer 会失败？
 
