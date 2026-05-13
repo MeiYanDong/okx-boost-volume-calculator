@@ -3688,6 +3688,16 @@ function syncWalletRecords(current: WalletArchiveRecord[], entries: WalletListEn
         savedAt: persisted.savedAt,
       };
     }
+    if (existing && existing.result && existing.source === "archive") {
+      return {
+        ...existing,
+        name,
+        progress:
+          existing.result.windowEnd === endDate
+            ? existing.progress || "已从 Supabase 云端归档恢复"
+            : existing.progress || "Supabase 云端归档待刷新",
+      };
+    }
     if (existing && existing.result && existing.source === "fresh" && existing.result.windowEnd === endDate) {
       return { ...existing, name };
     }

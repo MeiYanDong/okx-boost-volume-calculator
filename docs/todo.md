@@ -75,6 +75,8 @@
   子 todo：[S34 Supabase 归档读取瘦身](./todos/2026-05-12-supabase-archive-read-slim.md)
 - [x] S35 禁用私有访问码归档回退
   子 todo：[S35 禁用私有访问码归档回退](./todos/2026-05-12-disable-access-code-archive-fallback.md)
+- [x] S36 Supabase 归档恢复后被清空修复
+  子 todo：[S36 Supabase 归档恢复后被清空修复](./todos/2026-05-13-preserve-supabase-archive-records.md)
 
 ## 维护规则
 
