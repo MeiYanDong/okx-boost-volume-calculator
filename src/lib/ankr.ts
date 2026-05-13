@@ -5,6 +5,8 @@ import type { ChainConfig } from "./types";
 const METHOD = "ankr_getTransactionsByAddress";
 const PAGE_SIZE = 100;
 const MAX_PAGES = 200;
+const MAX_RATE_LIMIT_RETRIES = 8;
+const RATE_LIMIT_BACKOFF_MS = 2_000;
 
 type AnkrTransaction = {
   blockNumber?: string;
@@ -101,25 +103,31 @@ async function fetchAnkrPage(params: {
   };
   if (params.pageToken) requestParams.pageToken = params.pageToken;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: serverAccessHeaders({
-      accept: "application/json",
-      "content-type": "application/json",
-    }),
-    body: JSON.stringify({
-      id: 1,
-      jsonrpc: "2.0",
-      method: METHOD,
-      params: requestParams,
-    }),
-  });
-  const payload = (await response.json().catch(() => ({}))) as AnkrTransactionsResponse;
-  if (!response.ok || payload.error) {
+  for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt += 1) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: serverAccessHeaders({
+        accept: "application/json",
+        "content-type": "application/json",
+      }),
+      body: JSON.stringify({
+        id: 1,
+        jsonrpc: "2.0",
+        method: METHOD,
+        params: requestParams,
+      }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as AnkrTransactionsResponse;
+    if (response.ok && !payload.error) return payload;
+
     const message = payload.error?.message || `Ankr Advanced API HTTP ${response.status}`;
-    throw new Error(message);
+    if (!isRateLimitError(response.status, message) || attempt === MAX_RATE_LIMIT_RETRIES) {
+      throw new Error(message);
+    }
+    await sleep(RATE_LIMIT_BACKOFF_MS * (attempt + 1));
   }
-  return payload;
+
+  throw new Error("Ankr Advanced API rate limit retry exhausted");
 }
 
 function ankrMethodUrl(rawUrl: string): string {
@@ -143,4 +151,12 @@ function parseBlockNumber(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = value.startsWith("0x") ? Number(BigInt(value)) : Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isRateLimitError(status: number, message: string): boolean {
+  return status === 429 || /rate limit|too many requests/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }

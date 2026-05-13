@@ -3,6 +3,8 @@ import { serverAccessHeaders } from "./serverAccess";
 import type { ChainConfig, TokenMeta } from "./types";
 
 const RPC_REQUEST_TIMEOUT_MS = 25_000;
+const RPC_MAX_RETRIES = 6;
+const RPC_RETRY_BACKOFF_MS = 1_250;
 
 type RpcBlock = {
   number: string;
@@ -51,31 +53,41 @@ export class RpcClient {
   }
 
   async request<T>(method: string, params: unknown[]): Promise<T> {
-    const controller = new AbortController();
-    const timeout = globalThis.setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
-    try {
-      const response = await fetch(this.rpcUrl, {
-        method: "POST",
-        headers: serverAccessHeaders({ "content-type": "application/json" }),
-        body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
-        signal: controller.signal,
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(errorMessage(payload.error || payload.message || `${method} HTTP ${response.status}`));
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= RPC_MAX_RETRIES; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = globalThis.setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
+      try {
+        const response = await fetch(this.rpcUrl, {
+          method: "POST",
+          headers: serverAccessHeaders({ "content-type": "application/json" }),
+          body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new RpcRequestError(
+            errorMessage(payload.error || payload.message || `${method} HTTP ${response.status}`),
+            response.status,
+          );
+        }
+        if (payload.error) {
+          throw new RpcRequestError(errorMessage(payload.error.message || payload.error));
+        }
+        return payload.result as T;
+      } catch (error) {
+        const normalizedError =
+          error instanceof Error && error.name === "AbortError"
+            ? new RpcRequestError(`${method} timed out after ${RPC_REQUEST_TIMEOUT_MS / 1000}s`)
+            : error;
+        lastError = normalizedError;
+        if (attempt >= RPC_MAX_RETRIES || !isRetryableRpcError(normalizedError)) throw normalizedError;
+        await sleep(RPC_RETRY_BACKOFF_MS * (attempt + 1));
+      } finally {
+        globalThis.clearTimeout(timeout);
       }
-      if (payload.error) {
-        throw new Error(errorMessage(payload.error.message || payload.error));
-      }
-      return payload.result as T;
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(`${method} timed out after ${RPC_REQUEST_TIMEOUT_MS / 1000}s`);
-      }
-      throw error;
-    } finally {
-      globalThis.clearTimeout(timeout);
     }
+    throw lastError;
   }
 
   async getBlockNumber(): Promise<number> {
@@ -163,6 +175,36 @@ function errorMessage(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+class RpcRequestError extends Error {
+  constructor(message: string, readonly statusCode?: number) {
+    super(message);
+    this.name = "RpcRequestError";
+  }
+}
+
+function isRetryableRpcError(error: unknown): boolean {
+  const statusCode = error instanceof RpcRequestError ? error.statusCode : undefined;
+  if (statusCode && [408, 425, 429, 500, 502, 503, 504].includes(statusCode)) return true;
+  const message = errorMessage(error).toLowerCase();
+  return [
+    "rate limit",
+    "too many request",
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "fetch failed",
+    "socket hang up",
+    "econnreset",
+  ].some((needle) => message.includes(needle));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
 function decodeString(hex: string | null): string | null {

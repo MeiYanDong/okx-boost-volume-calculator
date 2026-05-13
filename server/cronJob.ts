@@ -1,11 +1,12 @@
 import { BSC_CHAIN, CHAINS, chainById, isAddress, normalizeAddress } from "../src/lib/chains";
 import { buildUtcWindow, calculateBoostVolumeAcrossChains } from "../src/lib/calculator";
 import { formatUsd } from "../src/lib/format";
+import { repriceCalculationResult } from "../src/lib/reprice";
 import type { CalculationResult, ChainConfig, ParsedSwap } from "../src/lib/types";
 
 const ADDRESS_PATTERN = /0x[a-fA-F0-9]{40}/g;
 const DEFAULT_TEN_DAY_TARGET = 5000;
-const CRON_SCAN_CONCURRENCY = 3;
+const CRON_SCAN_CONCURRENCY = 1;
 const MAX_SCAN_HISTORY_RECORDS = 200;
 const SNAPSHOT_CONFIRM_TIME_LABEL = "08:00";
 
@@ -436,45 +437,7 @@ function buildCronFeishuMessage(params: {
 function applyBonusRules(result: CalculationResult, bonusRules: string, walletAddress: string): CalculationResult {
   const bonuses = parseScopedBonusRules(bonusRules);
   const wallet = normalizeAddress(walletAddress);
-  const swaps = result.swaps.map((swap) => {
-    const bonusMultiplier = scopedBonusMultiplierForSwap(swap, bonuses, wallet);
-    const boostVolume =
-      swap.tradeUsd === undefined || swap.baseMultiplier === 0
-        ? 0
-        : swap.tradeUsd * swap.baseMultiplier * bonusMultiplier;
-    return {
-      ...swap,
-      bonusMultiplier,
-      boostVolume,
-    };
-  });
-
-  const dailyRows = result.dailyRows.map((row) => ({
-    ...row,
-    txCount: 0,
-    boostVolume: 0,
-    tradeUsd: 0,
-  }));
-  const dailyMap = new Map(dailyRows.map((row) => [row.date, row]));
-  for (const swap of swaps) {
-    const row = dailyMap.get(swap.utcDate);
-    if (!row) continue;
-    row.txCount += swap.status === "counted" ? 1 : 0;
-    row.boostVolume += swap.boostVolume;
-    row.tradeUsd += swap.tradeUsd || 0;
-  }
-
-  const totalBoostVolume = dailyRows.reduce((sum, row) => sum + row.boostVolume, 0);
-  const totalTradeUsd = dailyRows.reduce((sum, row) => sum + row.tradeUsd, 0);
-
-  return {
-    ...result,
-    averageBoostVolume: totalBoostVolume / 10,
-    totalBoostVolume,
-    totalTradeUsd,
-    dailyRows,
-    swaps,
-  };
+  return repriceCalculationResult(result, (swap) => scopedBonusMultiplierForSwap(swap, bonuses, wallet));
 }
 
 function scopedBonusMultiplierForSwap(swap: ParsedSwap, rules: ScopedBonusRules, wallet: string): number {

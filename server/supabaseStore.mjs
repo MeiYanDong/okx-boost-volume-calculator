@@ -585,7 +585,143 @@ async function saveScanResults(env, workspaceId, walletIdByAddress, archive) {
     .filter((row) => isUtcDate(row.snapshot_date) && isUtcDate(row.window_start) && isUtcDate(row.window_end));
 
   if (!rows.length) return [];
-  return restUpsert(env, "wallet_scan_results", rows, "workspace_id,wallet_address,snapshot_date");
+  const saved = [];
+  for (const row of rows) {
+    const result = await saveScanResultRow(env, row);
+    if (result) saved.push(result);
+  }
+  return saved;
+}
+
+async function saveScanResultRow(env, row) {
+  const existing = await getExistingScanResultRow(env, row);
+  if (hasUnparsedCandidateHashes(row.result)) {
+    if (existing) return existing;
+    throw userError("扫描结果交易明细不完整，已拒绝写入。请重新刷新新增交易。", 409);
+  }
+  if (existing && isScanResultRegression(row, existing)) return existing;
+
+  const updated = await updateScanResultIfNewer(env, row);
+  if (updated) return updated;
+
+  try {
+    const [inserted] = await restInsert(env, "wallet_scan_results", [row]);
+    return inserted || null;
+  } catch (error) {
+    if (!isConflictError(error)) throw error;
+    return updateScanResultIfNewer(env, row);
+  }
+}
+
+async function getExistingScanResultRow(env, row) {
+  const [existing] = await restSelect(env, "wallet_scan_results", {
+    workspace_id: `eq.${row.workspace_id}`,
+    wallet_address: `eq.${row.wallet_address}`,
+    snapshot_date: `eq.${row.snapshot_date}`,
+    select: "workspace_id,wallet_address,snapshot_date,result,source,saved_at,boost_volume,raw_volume,tx_count",
+    limit: "1",
+  });
+  return existing || null;
+}
+
+async function updateScanResultIfNewer(env, row) {
+  const [updated] = await restPatch(
+    env,
+    "wallet_scan_results",
+    {
+      workspace_id: `eq.${row.workspace_id}`,
+      wallet_address: `eq.${row.wallet_address}`,
+      snapshot_date: `eq.${row.snapshot_date}`,
+      or: `(${["saved_at.is.null", `saved_at.lte.${row.saved_at}`].join(",")})`,
+    },
+    row,
+  );
+  return updated || null;
+}
+
+function isScanResultRegression(incomingRow, existingRow) {
+  const incoming = incomingRow?.result;
+  const existing = existingRow?.result;
+  if (!isObject(existing)) return false;
+  if (!isObject(incoming)) return true;
+  if (hasUnparsedCandidateHashes(incoming)) return true;
+  const existingHasIncompleteDetails = hasUnparsedCandidateHashes(existing);
+
+  const existingChains = chainScanMap(existing);
+  const incomingChains = chainScanMap(incoming);
+  for (const [chainId, existingScan] of existingChains) {
+    const incomingScan = incomingChains.get(chainId);
+    if (!incomingScan) return true;
+    if (numberValue(incomingScan.scannedToBlock) < numberValue(existingScan.scannedToBlock)) return true;
+    if (!existingHasIncompleteDetails && arrayLength(incomingScan.txHashes) < arrayLength(existingScan.txHashes)) return true;
+    if (chainSwapCount(incoming, chainId) < chainSwapCount(existing, chainId)) return true;
+  }
+
+  const existingSwapChains = swapChainSet(existing);
+  const incomingSwapChains = swapChainSet(incoming);
+  for (const chainId of existingSwapChains) {
+    if (!incomingSwapChains.has(chainId)) return true;
+  }
+
+  if (!existingChains.size && numberValue(incoming.scannedToBlock) < numberValue(existing.scannedToBlock)) return true;
+  if (!existingHasIncompleteDetails && arrayLength(incoming.txHashes) < arrayLength(existing.txHashes)) return true;
+  return countedSwapCount(incoming) < countedSwapCount(existing) && arrayLength(incoming.swaps) < arrayLength(existing.swaps);
+}
+
+function hasUnparsedCandidateHashes(result) {
+  const chains = chainScanMap(result);
+  for (const [chainId, scan] of chains) {
+    const hashes = Array.isArray(scan.txHashes) ? scan.txHashes.map(normalizeAddress).filter(Boolean) : [];
+    if (!hashes.length) continue;
+    const parsedHashes = chainSwapHashSet(result, chainId);
+    if (hashes.some((hash) => !parsedHashes.has(hash))) return true;
+  }
+  return false;
+}
+
+function chainScanMap(result) {
+  const scans = new Map();
+  if (!isObject(result?.chainScans)) return scans;
+  for (const [chainId, scan] of Object.entries(result.chainScans)) {
+    if (isObject(scan)) scans.set(chainId, scan);
+  }
+  return scans;
+}
+
+function swapChainSet(result) {
+  const chains = new Set();
+  for (const swap of Array.isArray(result?.swaps) ? result.swaps : []) {
+    if (typeof swap?.chainId === "string" && swap.chainId) chains.add(swap.chainId);
+  }
+  return chains;
+}
+
+function chainSwapCount(result, chainId) {
+  return chainSwapHashSet(result, chainId).size;
+}
+
+function chainSwapHashSet(result, chainId) {
+  const hashes = new Set();
+  for (const swap of Array.isArray(result?.swaps) ? result.swaps : []) {
+    const swapChainId = typeof swap?.chainId === "string" && swap.chainId ? swap.chainId : "bsc";
+    if (swapChainId !== chainId) continue;
+    const hash = normalizeAddress(swap?.hash);
+    if (hash) hashes.add(hash);
+  }
+  return hashes;
+}
+
+function countedSwapCount(result) {
+  return (Array.isArray(result?.swaps) ? result.swaps : []).filter((swap) => swap?.status === "counted").length;
+}
+
+function arrayLength(value) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function numberValue(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function getOrCreateDefaultWorkspace(env, userId) {

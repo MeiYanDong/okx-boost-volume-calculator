@@ -22,7 +22,13 @@ import { handleDailyRefreshCron } from "./server/cronApi.mjs";
 const root = fileURLToPath(new URL(".", import.meta.url));
 const mode = process.env.NODE_ENV === "production" ? "production" : "development";
 const isProduction = mode === "production";
-const env = { ...loadEnv(mode, root, ""), ...process.env };
+const modeEnv = loadEnv(mode, root, "");
+const productionFallbackEnv = mode === "development" ? pickLocalFallbackEnv(loadEnv("production", root, "")) : {};
+const env = {
+  ...productionFallbackEnv,
+  ...modeEnv,
+  ...process.env,
+};
 const port = Number(env.PORT || 5173);
 const config = createProxyConfig(env);
 
@@ -118,4 +124,24 @@ function mimeType(pathname) {
   if (ext === ".svg") return "image/svg+xml";
   if (ext === ".png") return "image/png";
   return "application/octet-stream";
+}
+
+function pickLocalFallbackEnv(source) {
+  const allowed = new Set([
+    "ACCESS_PASSWORD",
+    "ANKR_MULTICHAIN_RPC_URL",
+    "BSC_RPC_URL",
+    "XLAYER_RPC_URL",
+    "ETHERSCAN_API_KEY",
+    "CRON_SECRET",
+    "KV_REST_API_URL",
+    "KV_REST_API_TOKEN",
+    "KV_REST_API_READ_ONLY_TOKEN",
+    "KV_URL",
+    "REDIS_URL",
+    "SUPABASE_URL",
+    "SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_SECRET_KEY",
+  ]);
+  return Object.fromEntries(Object.entries(source).filter(([key, value]) => allowed.has(key) && String(value || "").trim()));
 }

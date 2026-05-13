@@ -26,10 +26,11 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { CHAINS, chainById, isAddress, normalizeAddress } from "./lib/chains";
 import { buildUtcWindow, calculateBoostVolumeAcrossChains, latestSelectableUtcDate } from "./lib/calculator";
 import { formatNumber, formatUsd, shortHash } from "./lib/format";
+import { repriceCalculationResult } from "./lib/reprice";
 import { readServerAccessPassword, serverAccessHeaders, writeServerAccessPassword } from "./lib/serverAccess";
 import {
   authHeaders,
@@ -68,7 +69,7 @@ const DEFAULT_DATA_SPACE = "default";
 const UI_STATE_KEY = "okx-boost:ui:v4";
 const RESULT_CACHE_PREFIX = "okx-boost:result:v2";
 const SCAN_HISTORY_KEY = "okx-boost:scan-history:v1";
-const BULK_SCAN_CONCURRENCY = 3;
+const BULK_SCAN_CONCURRENCY = 1;
 const DEFAULT_TEN_DAY_TARGET = "5000";
 const MAX_SCAN_HISTORY_RECORDS = 200;
 const ADDRESS_PATTERN = /0x[a-fA-F0-9]{40}/g;
@@ -257,9 +258,10 @@ export default function App() {
   const [archiveSyncState, setArchiveSyncState] = useState<ArchiveSyncState>({ status: "idle", message: "云端归档待同步" });
   const [serverArchiveReady, setServerArchiveReady] = useState(false);
   const [serverArchiveContext, setServerArchiveContext] = useState("");
-  const [records, setRecords] = useState<WalletArchiveRecord[]>(() =>
-    syncWalletRecords([], parseWalletList(initialWalletsText).entries, initialEndDate),
+  const [records, setRecordsState] = useState<WalletArchiveRecord[]>(() =>
+    syncWalletRecords([], parseWalletList(initialWalletsText).entries, initialEndDate, { allowLocalCache: !authSession }),
   );
+  const recordsRef = useRef(records);
   const [scanHistory, setScanHistory] = useState<ScanHistoryRecord[]>(readPersistedScanHistory);
 
   const parsedWallets = useMemo(() => parseWalletList(walletsText), [walletsText]);
@@ -305,6 +307,18 @@ export default function App() {
     () => buildPrimaryAction(appliedRecords, portfolio, anyRunning),
     [appliedRecords, portfolio, anyRunning],
   );
+
+  function setRecords(next: SetStateAction<WalletArchiveRecord[]>) {
+    setRecordsState((current) => {
+      const resolved = typeof next === "function" ? next(current) : next;
+      recordsRef.current = resolved;
+      return resolved;
+    });
+  }
+
+  useEffect(() => {
+    recordsRef.current = records;
+  }, [records]);
 
   useEffect(() => {
     if (authSession) return;
@@ -387,8 +401,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setRecords((current) => syncWalletRecords(current, parsedWallets.entries, endDate));
-  }, [walletsKey, walletNamesKey, endDate, parsedWallets.entries]);
+    setRecords((current) => syncWalletRecords(current, parsedWallets.entries, endDate, { allowLocalCache: !authSession }));
+  }, [walletsKey, walletNamesKey, endDate, parsedWallets.entries, authSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -464,7 +478,7 @@ export default function App() {
         tenDayTarget,
         boostOverrides,
         dataSpace,
-        records,
+        records: [],
         scanHistory,
         accessPassword,
         authSession,
@@ -607,7 +621,7 @@ export default function App() {
       });
       return true;
     }
-    const existingRecord = records.find((record) => record.address === normalizedAddress) || null;
+    const existingRecord = recordsRef.current.find((record) => record.address === normalizedAddress) || null;
     const existingResult = existingRecord?.result || null;
     const previousResult = options.forceRefresh ? null : cached?.result || existingResult;
     const previousSavedAt = cached?.savedAt || existingRecord?.savedAt;
@@ -742,7 +756,6 @@ export default function App() {
 
   function persistArchiveImmediately(updatedRecord: WalletArchiveRecord, historyRecord: ScanHistoryRecord) {
     if (!canUseServerArchive || authWalletQuotaExceeded) return;
-    const nextRecords = buildArchiveRecordsSnapshot(records, parsedWallets.entries, updatedRecord, endDate);
     const nextScanHistory = [historyRecord, ...scanHistory.filter((item) => item.id !== historyRecord.id)].slice(
       0,
       MAX_SCAN_HISTORY_RECORDS,
@@ -755,7 +768,7 @@ export default function App() {
       tenDayTarget,
       boostOverrides,
       dataSpace,
-      records: nextRecords,
+      records: [updatedRecord],
       scanHistory: nextScanHistory,
       accessPassword,
       authSession,
@@ -3593,45 +3606,7 @@ function buildTokenBonusRows(result: CalculationResult, bonusRules: string, wall
 function applyBonusRules(result: CalculationResult, bonusRules: string, walletAddress: string): CalculationResult {
   const bonuses = parseScopedBonusRules(bonusRules);
   const wallet = normalizeAddress(walletAddress);
-  const swaps = result.swaps.map((swap) => {
-    const bonusMultiplier = scopedBonusMultiplierForSwap(swap, bonuses, wallet);
-    const boostVolume =
-      swap.tradeUsd === undefined || swap.baseMultiplier === 0
-        ? 0
-        : swap.tradeUsd * swap.baseMultiplier * bonusMultiplier;
-    return {
-      ...swap,
-      bonusMultiplier,
-      boostVolume,
-    };
-  });
-
-  const dailyRows = result.dailyRows.map((row) => ({
-    ...row,
-    txCount: 0,
-    boostVolume: 0,
-    tradeUsd: 0,
-  }));
-  const dailyMap = new Map(dailyRows.map((row) => [row.date, row]));
-  for (const swap of swaps) {
-    const row = dailyMap.get(swap.utcDate);
-    if (!row) continue;
-    row.txCount += swap.status === "counted" ? 1 : 0;
-    row.boostVolume += swap.boostVolume;
-    row.tradeUsd += swap.tradeUsd || 0;
-  }
-
-  const totalBoostVolume = dailyRows.reduce((sum, row) => sum + row.boostVolume, 0);
-  const totalTradeUsd = dailyRows.reduce((sum, row) => sum + row.tradeUsd, 0);
-
-  return {
-    ...result,
-    averageBoostVolume: totalBoostVolume / 10,
-    totalBoostVolume,
-    totalTradeUsd,
-    dailyRows,
-    swaps,
-  };
+  return repriceCalculationResult(result, (swap) => scopedBonusMultiplierForSwap(swap, bonuses, wallet));
 }
 
 function parseWalletList(raw: string): ParsedWalletList {
@@ -3670,12 +3645,17 @@ function parseWalletList(raw: string): ParsedWalletList {
   return { entries, addresses: entries.map((entry) => entry.address), invalid, duplicateCount };
 }
 
-function syncWalletRecords(current: WalletArchiveRecord[], entries: WalletListEntry[], endDate: string): WalletArchiveRecord[] {
+function syncWalletRecords(
+  current: WalletArchiveRecord[],
+  entries: WalletListEntry[],
+  endDate: string,
+  options: { allowLocalCache: boolean },
+): WalletArchiveRecord[] {
   const currentByAddress = new Map(current.map((record) => [record.address, record]));
   return entries.map(({ address, name }) => {
     const existing = currentByAddress.get(address);
     if (existing?.state === "running") return { ...existing, name };
-    const persisted = readPersistedResult(address, endDate);
+    const persisted = options.allowLocalCache ? readPersistedResult(address, endDate) : null;
     if (persisted) {
       return {
         address,
@@ -3701,30 +3681,6 @@ function syncWalletRecords(current: WalletArchiveRecord[], entries: WalletListEn
     if (existing && existing.result && existing.source === "fresh" && existing.result.windowEnd === endDate) {
       return { ...existing, name };
     }
-    return {
-      address,
-      name,
-      state: "idle",
-      source: "empty",
-      result: null,
-      progress: "等待扫描",
-      error: "",
-    };
-  });
-}
-
-function buildArchiveRecordsSnapshot(
-  current: WalletArchiveRecord[],
-  entries: WalletListEntry[],
-  updatedRecord: WalletArchiveRecord,
-  endDate: string,
-): WalletArchiveRecord[] {
-  const currentByAddress = new Map(current.map((record) => [record.address, record]));
-  currentByAddress.set(updatedRecord.address, updatedRecord);
-
-  return entries.map(({ address, name }) => {
-    const existing = currentByAddress.get(address);
-    if (existing) return { ...existing, name: name || existing.name };
     return {
       address,
       name,

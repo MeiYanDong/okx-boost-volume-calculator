@@ -77,6 +77,16 @@
   子 todo：[S35 禁用私有访问码归档回退](./todos/2026-05-12-disable-access-code-archive-fallback.md)
 - [x] S36 Supabase 归档恢复后被清空修复
   子 todo：[S36 Supabase 归档恢复后被清空修复](./todos/2026-05-13-preserve-supabase-archive-records.md)
+- [x] S37 修复 xBETH / USDt0 基础倍数特例
+  子 todo：[S37 xBETH / USDt0 基础倍数特例](./todos/2026-05-13-xbeth-usdt0-rule-fix.md)
+- [x] S38 修复本地刷新新增 Ankr 配置加载
+  子 todo：[S38 本地刷新新增 Ankr 配置加载修复](./todos/2026-05-13-local-ankr-env-fallback.md)
+- [x] S39 修复刷新新增并发写回导致数据回退
+  子 todo：[S39 刷新增量并发写回防回退](./todos/2026-05-13-refresh-writeback-rollback-fix.md)
+- [x] S40 修复全局刷新与单钱包刷新不一致
+  子 todo：[S40 全局刷新与单钱包刷新一致性](./todos/2026-05-13-global-refresh-consistency.md)
+- [x] S41 加固交易明细完整性
+  子 todo：[S41 交易明细完整性加固](./todos/2026-05-13-transaction-detail-completeness.md)
 
 ## 维护规则
 

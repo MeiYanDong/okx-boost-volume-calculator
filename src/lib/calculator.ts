@@ -36,31 +36,33 @@ export async function calculateBoostVolumeAcrossChains(input: MultiChainCalculat
   const chains = input.chains.length ? input.chains : [];
   if (!chains.length) throw new Error("No chain configured");
 
-  const settled = await Promise.all(
-    chains.map(async (chain) => {
-      try {
-        return {
+  const settled: Array<{ chain: ChainConfig; result: CalculationResult } | { chain: ChainConfig; error: string }> = [];
+  for (const chain of chains) {
+    try {
+      settled.push({
+        chain,
+        result: await calculateBoostVolume({
+          ...input,
           chain,
-          result: await calculateBoostVolume({
-            ...input,
-            chain,
-            previousResult: previousResultForChain(input.previousResult, chain.id),
-            onProgress: (message) => input.onProgress?.(`${chain.name}: ${message}`),
-          }),
-        };
-      } catch (error) {
-        return {
-          chain,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }),
-  );
+          previousResult: previousResultForChain(input.previousResult, chain.id),
+          onProgress: (message) => input.onProgress?.(`${chain.name}: ${message}`),
+        }),
+      });
+    } catch (error) {
+      settled.push({
+        chain,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   const successful = settled.filter((item): item is { chain: ChainConfig; result: CalculationResult } => "result" in item);
   const failed = settled.filter((item): item is { chain: ChainConfig; error: string } => "error" in item);
   if (!successful.length) {
     throw new Error(failed.map((item) => `${item.chain.name}: ${item.error}`).join("\n") || "No chain scan succeeded");
+  }
+  if (failed.length) {
+    throw new Error(`部分链扫描失败，已保留原归档，未写入半成品结果：${failed.map((item) => `${item.chain.name}: ${item.error}`).join("\n")}`);
   }
 
   const { days } = buildUtcWindow(input.endDate);
@@ -213,13 +215,17 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     writeTxHashesCache(txHashesKey, discoveredTxHashes);
   }
 
-  const previousHashes = new Set((canIncrementalRefresh ? previousResult!.txHashes : []).map((hash) => normalizeAddress(hash)));
+  const previousWindowSwaps = canIncrementalRefresh
+    ? filterSwapsForWindow(dedupeSwaps(previousResult!.swaps), startSeconds, endSeconds)
+    : [];
+  const previousWindowHashes = previousWindowSwaps.map((swap) => swap.hash);
+  const previousHashes = new Set(previousWindowHashes.map((hash) => normalizeAddress(hash)));
   const txHashesToParse = canIncrementalRefresh
     ? discoveredTxHashes.filter((hash) => !previousHashes.has(normalizeAddress(hash)))
     : discoveredTxHashes;
-  const txHashes = mergeTxHashes(canIncrementalRefresh ? previousResult!.txHashes : [], txHashesToParse);
+  const txHashes = mergeTxHashes(previousWindowHashes, txHashesToParse);
   const swaps = canIncrementalRefresh
-    ? filterSwapsForWindow(dedupeSwaps(previousResult!.swaps), startSeconds, endSeconds)
+    ? previousWindowSwaps
     : [];
 
   if (canIncrementalRefresh) {
@@ -228,6 +234,7 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     );
   }
 
+  const parseErrors: Array<{ hash: string; message: string }> = [];
   for (let index = 0; index < txHashesToParse.length; index += 1) {
     const hash = txHashesToParse[index];
     input.onProgress?.(`解析交易 ${index + 1}/${txHashesToParse.length}: ${hash.slice(0, 10)}...`);
@@ -246,11 +253,16 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
       if (!cachedSwap) writeParsedSwapCache(swapKey, swap);
       if (swap.timestamp >= startSeconds && swap.timestamp < endSeconds) swaps.push(swap);
     } catch (error) {
-      warnings.push(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(message);
+      parseErrors.push({ hash, message });
     }
   }
 
   const windowSwaps = dedupeSwaps(filterSwapsForWindow(swaps, startSeconds, endSeconds));
+  if (parseErrors.length) {
+    throw new Error(`交易解析未完成，已保留原归档，未写入残缺交易明细：${formatParseErrors(parseErrors)}`);
+  }
 
   const dailyRows = days.map<DailyBoostRow>((date) => ({
     date,
@@ -342,6 +354,14 @@ function dedupeSwaps(swaps: CalculationResult["swaps"]): CalculationResult["swap
     deduped.push(swap);
   }
   return deduped;
+}
+
+function formatParseErrors(errors: Array<{ hash: string; message: string }>): string {
+  const preview = errors
+    .slice(0, 3)
+    .map((error) => `${error.hash.slice(0, 10)}... ${error.message}`)
+    .join("；");
+  return errors.length > 3 ? `${preview}；另 ${errors.length - 3} 笔` : preview;
 }
 
 async function discoverOkxHashes(params: {

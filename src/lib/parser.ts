@@ -50,7 +50,7 @@ export async function parseOkxSwap(params: {
     outputAmount,
   });
   const ruleVersion = boostRuleVersionForTimestamp(timestamp);
-  const baseMultiplier = baseMultiplierFor(input.token, output.token, timestamp);
+  const baseMultiplier = baseMultiplierFor(params.chain, input.token, output.token, timestamp);
   const bonusMultiplier = bonusMultiplierFor(params.chain, input.token, output.token, params.boostBonuses);
   const boostVolume = tradeUsd === undefined ? 0 : tradeUsd * baseMultiplier * bonusMultiplier;
   const status = tradeUsd === undefined ? "partial" : baseMultiplier === 0 ? "excluded" : "counted";
