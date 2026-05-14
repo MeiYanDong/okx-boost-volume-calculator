@@ -5,6 +5,11 @@ import type { ChainConfig, TokenMeta } from "./types";
 const RPC_REQUEST_TIMEOUT_MS = 25_000;
 const RPC_MAX_RETRIES = 6;
 const RPC_RETRY_BACKOFF_MS = 1_250;
+const LATEST_BLOCK_CACHE_MS = 15_000;
+
+const globalBlockTimestampCaches = new Map<string, Map<number, number>>();
+const globalTimestampBlockCaches = new Map<string, Map<number, number>>();
+const globalLatestBlockCache = new Map<string, { blockNumber: number; expiresAt: number }>();
 
 type RpcBlock = {
   number: string;
@@ -91,7 +96,11 @@ export class RpcClient {
   }
 
   async getBlockNumber(): Promise<number> {
-    return Number(BigInt(await this.request<string>("eth_blockNumber", [])));
+    const cached = globalLatestBlockCache.get(this.rpcUrl);
+    if (cached && cached.expiresAt > Date.now()) return cached.blockNumber;
+    const blockNumber = Number(BigInt(await this.request<string>("eth_blockNumber", [])));
+    globalLatestBlockCache.set(this.rpcUrl, { blockNumber, expiresAt: Date.now() + LATEST_BLOCK_CACHE_MS });
+    return blockNumber;
   }
 
   async getBlock(blockNumber: number): Promise<RpcBlock> {
@@ -101,13 +110,24 @@ export class RpcClient {
   async getBlockTimestamp(blockNumber: number): Promise<number> {
     const cached = this.blockTimestampCache.get(blockNumber);
     if (cached !== undefined) return cached;
+    const globalCache = globalBlockTimestampCache(this.rpcUrl);
+    const globalCached = globalCache.get(blockNumber);
+    if (globalCached !== undefined) {
+      this.blockTimestampCache.set(blockNumber, globalCached);
+      return globalCached;
+    }
     const block = await this.getBlock(blockNumber);
     const timestamp = Number(BigInt(block.timestamp));
     this.blockTimestampCache.set(blockNumber, timestamp);
+    globalCache.set(blockNumber, timestamp);
     return timestamp;
   }
 
   async blockByTimestamp(timestampSeconds: number): Promise<number> {
+    const timestampCache = globalTimestampBlockCache(this.rpcUrl);
+    const cached = timestampCache.get(timestampSeconds);
+    if (cached !== undefined) return cached;
+
     let low = 1;
     let high = await this.getBlockNumber();
     while (low < high) {
@@ -116,6 +136,7 @@ export class RpcClient {
       if (midTimestamp < timestampSeconds) low = mid + 1;
       else high = mid;
     }
+    timestampCache.set(timestampSeconds, low);
     return low;
   }
 
@@ -205,6 +226,22 @@ function isRetryableRpcError(error: unknown): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
+function globalBlockTimestampCache(rpcUrl: string): Map<number, number> {
+  const existing = globalBlockTimestampCaches.get(rpcUrl);
+  if (existing) return existing;
+  const created = new Map<number, number>();
+  globalBlockTimestampCaches.set(rpcUrl, created);
+  return created;
+}
+
+function globalTimestampBlockCache(rpcUrl: string): Map<number, number> {
+  const existing = globalTimestampBlockCaches.get(rpcUrl);
+  if (existing) return existing;
+  const created = new Map<number, number>();
+  globalTimestampBlockCaches.set(rpcUrl, created);
+  return created;
 }
 
 function decodeString(hex: string | null): string | null {
