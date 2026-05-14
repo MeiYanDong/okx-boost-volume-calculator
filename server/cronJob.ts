@@ -165,17 +165,16 @@ export async function runDailyRefresh(params: {
   }));
   const forecastRows = buildSnapshotForecastRows(adjustedRecords, snapshotDate, targetTotal);
   const firstRiskRow = forecastRows.find((row) => row.atRiskWallets > 0) || null;
-  const shouldNotify = Boolean(firstRiskRow || failures.length);
-  const notificationText = shouldNotify
-    ? buildCronFeishuMessage({
-        snapshotDate,
-        targetTotal,
-        firstRiskRow,
-        failures,
-        succeeded: orderedRecords.length - failures.length,
-        walletCount: entries.length,
-      })
-    : "";
+  const shouldNotify = entries.length > 0;
+  const notificationText = buildCronFeishuMessage({
+    snapshotDate,
+    targetTotal,
+    firstRiskRow,
+    forecastRows,
+    failures,
+    succeeded: orderedRecords.length - failures.length,
+    walletCount: entries.length,
+  });
   const finishedAt = new Date().toISOString();
   const updatedArchive: ServerArchive = {
     ...archive,
@@ -386,17 +385,35 @@ function buildCronFeishuMessage(params: {
   snapshotDate: string;
   targetTotal: number;
   firstRiskRow: SnapshotForecastRow | null;
+  forecastRows: SnapshotForecastRow[];
   failures: Array<{ address: string; name: string; error: string }>;
   succeeded: number;
   walletCount: number;
 }): string {
+  const status = params.failures.length ? "有刷新失败" : params.firstRiskRow ? "存在达标风险" : "当前无风险";
   const lines = [
-    "OKX Boost 自动快照预警",
+    "OKX Boost 自动快照日报",
+    `状态：${status}`,
     `快照日：${params.snapshotDate}`,
     `确认时间：${formatToolbarDate(addUtcDays(params.snapshotDate, 1))} ${SNAPSHOT_CONFIRM_TIME_LABEL} 北京时间`,
     `单钱包目标：${formatUsd(params.targetTotal)}`,
     `自动刷新：成功 ${params.succeeded}/${params.walletCount}，失败 ${params.failures.length}`,
   ];
+
+  if (params.forecastRows.length) {
+    lines.push("", "未来快照摘要：");
+    for (const row of params.forecastRows.slice(0, 4)) {
+      lines.push(
+        [
+          `- ${row.runLabel} 北京时间`,
+          `风险 ${row.atRiskWallets}/${row.archivedWallets}`,
+          `总 Boost ${formatUsd(row.totalBoostVolume)}`,
+          `到期 ${formatUsd(row.expiredBoostVolume)}`,
+          `最大差额 ${formatUsd(row.worstGap)}`,
+        ].join("，"),
+      );
+    }
+  }
 
   if (params.firstRiskRow) {
     const riskWallets = params.firstRiskRow.walletRows

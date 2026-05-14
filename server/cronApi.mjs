@@ -232,10 +232,7 @@ async function resolveNotificationTarget(env, workspace) {
 
 function shouldNotifyForTarget(result, target) {
   if (!target?.webhookUrl) return false;
-  if (result.summary.failed > 0) return true;
-  const horizon = Number.isInteger(target.notifyFutureDays) ? target.notifyFutureDays : 3;
-  const forecastRows = Array.isArray(result.forecastRows) ? result.forecastRows.slice(0, horizon + 1) : [];
-  return forecastRows.some((row) => row.atRiskWallets > 0);
+  return true;
 }
 
 function validateCronAccess(request, config, env) {

@@ -87,6 +87,8 @@
   子 todo：[S40 全局刷新与单钱包刷新一致性](./todos/2026-05-13-global-refresh-consistency.md)
 - [x] S41 加固交易明细完整性
   子 todo：[S41 交易明细完整性加固](./todos/2026-05-13-transaction-detail-completeness.md)
+- [x] S42 修复飞书每日快照日报
+  子 todo：[S42 飞书每日快照日报](./todos/2026-05-14-feishu-daily-digest.md)
 
 ## 维护规则
 
