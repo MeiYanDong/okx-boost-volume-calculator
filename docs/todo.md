@@ -89,6 +89,8 @@
   子 todo：[S41 交易明细完整性加固](./todos/2026-05-13-transaction-detail-completeness.md)
 - [x] S42 修复飞书每日快照日报
   子 todo：[S42 飞书每日快照日报](./todos/2026-05-14-feishu-daily-digest.md)
+- [x] S43 修复 OKB / USDt0 基础倍率特例
+  子 todo：[S43 OKB / USDt0 基础倍率特例](./todos/2026-05-24-okb-usdt0-rule-fix.md)
 
 ## 维护规则
 
