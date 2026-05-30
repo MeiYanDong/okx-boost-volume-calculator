@@ -4,11 +4,11 @@
 
 ## 当前阶段
 
-S43：OKB / USDt0 基础倍率特例已完成。
+S44：X Layer 钱包索引失败时同窗口归档复用已完成。
 
-S43 修复 X Layer 上 `OKB / USDt0` 被误按普通 `other + group1 = 0.5x` 计算的问题。当前规则下 `OKB / USDt0` 基础倍率改为 `0.1x`，X Layer 链级 `1.2x` 加成保持不变，最终无额外代币加成时为 `0.12x`。
+S44 修复 X Layer 钱包索引不可用时错误显示为 RPC 公开链上记录失败、并阻断同钱包其他链增量刷新的问题。X Layer 仍不启用 RPC 日志兜底；同窗口已有 X Layer 归档时，增量刷新会沿用该链原归档并继续更新其他链，避免写入缺链半成品。
 
-子 plan：[S43 OKB / USDt0 基础倍率特例](./plans/2026-05-24-okb-usdt0-rule-fix.md)
+子 plan：[S44 X Layer 索引失败归档复用](./plans/2026-05-30-xlayer-index-archive-reuse.md)
 
 ## 阶段索引
 
@@ -58,6 +58,7 @@ S43 修复 X Layer 上 `OKB / USDt0` 被误按普通 `other + group1 = 0.5x` 计
 | S41 交易明细完整性加固 | 已完成 | [子 plan](./plans/2026-05-13-transaction-detail-completeness.md) | 防止候选 hash 已发现但交易明细解析残缺的结果写入归档 |
 | S42 飞书每日快照日报 | 已完成 | [子 plan](./plans/2026-05-14-feishu-daily-digest.md) | 飞书开启后每日发送快照日报，安全状态也有推送 |
 | S43 OKB / USDt0 基础倍率特例 | 已完成 | [子 plan](./plans/2026-05-24-okb-usdt0-rule-fix.md) | 修复 X Layer 原生 OKB 与 USDt0 交易被误按 `0.5x` 计算的问题 |
+| S44 X Layer 索引失败归档复用 | 已完成 | [子 plan](./plans/2026-05-30-xlayer-index-archive-reuse.md) | X Layer 钱包索引不可用时沿用同窗口原归档，其他链可继续增量刷新 |
 
 ## 执行原则
 

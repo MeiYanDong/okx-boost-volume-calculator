@@ -91,6 +91,8 @@
   子 todo：[S42 飞书每日快照日报](./todos/2026-05-14-feishu-daily-digest.md)
 - [x] S43 修复 OKB / USDt0 基础倍率特例
   子 todo：[S43 OKB / USDt0 基础倍率特例](./todos/2026-05-24-okb-usdt0-rule-fix.md)
+- [x] S44 修复 X Layer 索引失败时的同窗口归档复用
+  子 todo：[S44 X Layer 索引失败归档复用](./todos/2026-05-30-xlayer-index-archive-reuse.md)
 
 ## 维护规则
 
