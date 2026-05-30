@@ -11,11 +11,13 @@ const MAX_SCAN_HISTORY_RECORDS = 200;
 const SNAPSHOT_CONFIRM_TIME_LABEL = "08:00";
 
 type ProxyConfig = {
+  accessPassword?: string;
   bscRpcUrl?: string;
   xlayerRpcUrl?: string;
   ankrMultichainRpcUrl?: string;
   etherscanApiKey?: string;
   etherscanApiUrl?: string;
+  publicOrigin?: string;
 };
 
 type ServerArchiveRecord = {
@@ -119,6 +121,7 @@ export async function runDailyRefresh(params: {
         chains,
         ankrMultichainRpcUrl: params.config.ankrMultichainRpcUrl,
         apiKey: params.config.etherscanApiKey,
+        serviceAccessPassword: params.config.accessPassword,
         boostBonuses: {},
         incrementalRefresh: true,
         previousResult: previous?.result || undefined,
@@ -227,10 +230,18 @@ function buildServerChains(config: ProxyConfig): ChainConfig[] {
       return {
         ...chain,
         rpcUrl: config.xlayerRpcUrl || chain.rpcUrl,
+        explorerApiUrl: absoluteUrl(config.publicOrigin, chain.explorerApiUrl),
       };
     }
     return chain;
   });
+}
+
+function absoluteUrl(origin: string | undefined, pathname: string): string {
+  if (!pathname.startsWith("/")) return pathname;
+  const trimmed = String(origin || "").trim();
+  if (!trimmed) return pathname;
+  return new URL(pathname, trimmed.endsWith("/") ? trimmed : `${trimmed}/`).toString();
 }
 
 function walletEntriesForArchive(archive: ServerArchive): WalletListEntry[] {

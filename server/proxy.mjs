@@ -4,6 +4,7 @@ import { getSupabaseUserFromRequest, getUserNotificationTarget } from "./supabas
 
 const maxBodyBytes = 1_000_000;
 const upstreamTimeoutMs = 25_000;
+const okxXLayerDefaultExplorerApiUrl = "https://web3.okx.com/api/v5/xlayer/address/normal-transaction-list";
 const allowedRpcMethods = new Set([
   "eth_blockNumber",
   "eth_call",
@@ -26,6 +27,10 @@ export function createProxyConfig(env) {
     ankrMultichainRpcUrl: rawAnkrMultichainRpcUrl,
     etherscanApiKey: envValue(env, "ETHERSCAN_API_KEY", "VITE_ETHERSCAN_API_KEY"),
     etherscanApiUrl: "https://api.etherscan.io/v2/api",
+    okxXLayerApiKey: envValue(env, "OKX_XLAYER_API_KEY", "OKX_API_KEY"),
+    okxXLayerApiSecret: envValue(env, "OKX_XLAYER_API_SECRET", "OKX_API_SECRET"),
+    okxXLayerApiPassphrase: envValue(env, "OKX_XLAYER_API_PASSPHRASE", "OKX_API_PASSPHRASE"),
+    okxXLayerExplorerApiUrl: envValue(env, "OKX_XLAYER_EXPLORER_API_URL") || okxXLayerDefaultExplorerApiUrl,
   };
 }
 
@@ -75,6 +80,12 @@ export async function handleExplorerProxy(request, response, config, url = reque
   }
 
   await validateServiceAccess(request, config, env);
+  const chain = explorerProxyChain(url);
+  if (chain === "xlayer") {
+    await handleOkxXLayerExplorerProxy(response, config, url);
+    return;
+  }
+
   if (!config.etherscanApiKey) {
     sendJson(response, 200, {
       status: "0",
@@ -95,6 +106,36 @@ export async function handleExplorerProxy(request, response, config, url = reque
   upstream.searchParams.set("apikey", config.etherscanApiKey);
 
   const payload = await getJson(upstream.toString());
+  sendJson(response, 200, payload, { "cache-control": "no-store" });
+}
+
+async function handleOkxXLayerExplorerProxy(response, config, url) {
+  if (!hasOkxXLayerExplorerConfig(config)) {
+    sendJson(
+      response,
+      200,
+      {
+        code: "1",
+        msg: "OKX X Layer Explorer API is not configured",
+        data: [],
+      },
+      { "cache-control": "no-store" },
+    );
+    return;
+  }
+
+  validateExplorerParams(url.searchParams, "xlayer");
+  const upstream = new URL(config.okxXLayerExplorerApiUrl || okxXLayerDefaultExplorerApiUrl);
+  validateOkxXLayerExplorerUrl(upstream);
+  upstream.searchParams.set("chainShortName", "xlayer");
+  upstream.searchParams.set("address", url.searchParams.get("address") || "");
+  upstream.searchParams.set("startBlockHeight", url.searchParams.get("startblock") || "");
+  upstream.searchParams.set("endBlockHeight", url.searchParams.get("endblock") || "");
+  upstream.searchParams.set("isFromOrTo", "from");
+  upstream.searchParams.set("page", url.searchParams.get("page") || "1");
+  upstream.searchParams.set("limit", String(Math.min(Number(url.searchParams.get("offset") || 50), 50)));
+
+  const payload = await getOkxSignedJson(upstream, config);
   sendJson(response, 200, payload, { "cache-control": "no-store" });
 }
 
@@ -287,6 +328,12 @@ function rpcProxyChain(url) {
   throw new Error(`RPC chain is not allowed: ${chain}`);
 }
 
+function explorerProxyChain(url) {
+  const chain = (url.searchParams.get("chain") || "bsc").toLowerCase();
+  if (chain === "bsc" || chain === "xlayer") return chain;
+  throw new Error(`Explorer chain is not allowed: ${chain}`);
+}
+
 function validateAnkrBody(body) {
   if (!isObject(body) || body.jsonrpc !== "2.0" || body.method !== "ankr_getTransactionsByAddress") {
     throw new Error("Only ankr_getTransactionsByAddress is allowed");
@@ -304,7 +351,7 @@ function validateAnkrBody(body) {
   }
 }
 
-function validateExplorerParams(params) {
+function validateExplorerParams(params, chain = "bsc") {
   if (params.get("module") !== "account" || params.get("action") !== "txlist") {
     throw new Error("Only account txlist explorer queries are allowed");
   }
@@ -313,8 +360,10 @@ function validateExplorerParams(params) {
     const value = Number(params.get(name));
     if (!Number.isInteger(value) || value < 0) throw new Error(`Invalid explorer ${name}`);
   }
-  if (Number(params.get("offset")) > 10_000) throw new Error("Explorer offset is too large");
-  if (Number(params.get("page")) > 20) throw new Error("Explorer page is too large");
+  const maxOffset = chain === "xlayer" ? 50 : 10_000;
+  if (Number(params.get("offset")) > maxOffset) throw new Error("Explorer offset is too large");
+  const maxPage = chain === "xlayer" ? 100 : 20;
+  if (Number(params.get("page")) > maxPage) throw new Error("Explorer page is too large");
   if (!["asc", "desc"].includes(params.get("sort") || "")) throw new Error("Invalid explorer sort");
 }
 
@@ -339,6 +388,24 @@ async function postJson(url, body) {
 
 async function getJson(url) {
   return fetchJson(url, { method: "GET", headers: { accept: "application/json" } });
+}
+
+async function getOkxSignedJson(url, config) {
+  const timestamp = new Date().toISOString();
+  const requestPath = `${url.pathname}${url.search}`;
+  const signature = createHmac("sha256", config.okxXLayerApiSecret)
+    .update(`${timestamp}GET${requestPath}`)
+    .digest("base64");
+  return fetchJson(url.toString(), {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      "OK-ACCESS-KEY": config.okxXLayerApiKey,
+      "OK-ACCESS-SIGN": signature,
+      "OK-ACCESS-TIMESTAMP": timestamp,
+      "OK-ACCESS-PASSPHRASE": config.okxXLayerApiPassphrase,
+    },
+  });
 }
 
 async function fetchJson(url, init) {
@@ -422,6 +489,16 @@ function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function hasOkxXLayerExplorerConfig(config) {
+  return Boolean(config.okxXLayerApiKey && config.okxXLayerApiSecret && config.okxXLayerApiPassphrase);
+}
+
+function validateOkxXLayerExplorerUrl(url) {
+  if (url.protocol !== "https:" || url.hostname !== "web3.okx.com" || !url.pathname.startsWith("/api/v5/xlayer/")) {
+    throw new Error("OKX X Layer Explorer upstream URL is invalid");
+  }
+}
+
 function redact(value, config) {
   let output = String(value);
   for (const secret of [
@@ -429,6 +506,9 @@ function redact(value, config) {
     config.xlayerRpcUrl,
     config.ankrMultichainRpcUrl,
     config.etherscanApiKey,
+    config.okxXLayerApiKey,
+    config.okxXLayerApiSecret,
+    config.okxXLayerApiPassphrase,
     config.accessPassword,
     config.feishuWebhookUrl,
     config.feishuWebhookSecret,

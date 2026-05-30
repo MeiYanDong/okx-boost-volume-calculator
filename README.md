@@ -31,7 +31,7 @@ OKX Boost 的计算对新手不友好，主要有几个坑：
 这个工具把工作拆成两层：
 
 1. **交易发现**
-   优先用 Ankr 钱包索引快速找到 BNB Chain / X Layer 的 OKX 交易 hash；BNB Chain 如果 Ankr 不可用，再尝试 Explorer 和 Chainstack/RPC 兜底。X Layer 不用公共 RPC 扫日志兜底，因为公共节点通常限制 `eth_getLogs` 区间，不适合扫 10 天窗口。
+   优先用 Ankr 钱包索引快速找到 BNB Chain / X Layer 的 OKX 交易 hash；BNB Chain 如果 Ankr 不可用，再尝试 Explorer 和 Chainstack/RPC 兜底。X Layer 不用公共 RPC 扫日志兜底，因为公共节点通常限制 `eth_getLogs` 区间，不适合扫 10 天窗口；如果配置了 OKX X Layer Explorer API，Ankr X Layer 索引不可用时会改走 OKX 官方地址交易索引。
 
 2. **交易解析**
    用对应链的 RPC 读取交易、receipt、token 信息，计算基础倍数、成交额和 Boost 交易量。
@@ -96,7 +96,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 1. 把项目拉到本地。
 2. 安装依赖并启动本地网页。
 3. 配置服务端数据源，不要把密钥暴露到前端页面，也不要提交密钥文件。
-4. 优先配置 Ankr 钱包索引用来发现 BNB Chain 和 X Layer 交易；配置 BNB Chain RPC 用来解析 BNB Chain 交易，X Layer 可使用默认公共 RPC 或私有 `XLAYER_RPC_URL`。
+4. 优先配置 Ankr 钱包索引用来发现 BNB Chain 和 X Layer 交易；配置 BNB Chain RPC 用来解析 BNB Chain 交易，X Layer 可使用默认公共 RPC 或私有 `XLAYER_RPC_URL`。如果 Ankr 的 X Layer 钱包索引不可用，请配置 `OKX_XLAYER_API_KEY`、`OKX_XLAYER_API_SECRET`、`OKX_XLAYER_API_PASSPHRASE` 作为 X Layer 钱包交易索引兜底。
 5. 如果我要跨部署保存数据，请优先配置 Supabase 邀请制账号；旧版本也可以继续用 Vercel Upstash Redis。
 6. 如果我要飞书提醒，请帮我登录后在偏好设置里保存飞书自定义机器人 Webhook；如果机器人开启签名，也保存签名密钥。
 7. 打开本地页面，导入我的钱包地址。
@@ -130,7 +130,7 @@ GitHub 项目：https://github.com/MeiYanDong/okx-boost-volume-calculator
 
 请先阅读 docs/vercel-private-deploy.md，然后完成：
 1. 检查 Vercel 项目是否已关联正确仓库。
-2. 在 Vercel 环境变量里配置 Ankr、BNB Chain RPC、X Layer RPC、访问密码等服务端变量。
+2. 在 Vercel 环境变量里配置 Ankr、BNB Chain RPC、X Layer RPC、OKX X Layer Explorer API、访问密码等服务端变量。
 3. 配置 Vercel Upstash Redis，用来保存钱包列表、扫描结果、加成规则和自动刷新状态。
 4. 如果我要多用户账号隔离，请配置 Supabase：SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY、SUPABASE_SECRET_KEY，并实际验证 /api/auth?action=me 返回 configured: true。
 5. 配置 CRON_SECRET，用来保护每日自动刷新接口。

@@ -22,6 +22,10 @@
 | `ANKR_MULTICHAIN_RPC_URL` | Ankr Advanced 钱包交易索引，用来快速发现钱包 OKX 交易 hash | 优先配置 |
 | `BSC_RPC_URL` | BNB Chain 标准 RPC，用来查区块、交易、receipt、logs、token 信息 | 建议用 Chainstack |
 | `XLAYER_RPC_URL` | X Layer 标准 RPC，用来解析 X Layer 交易、receipt 和 token 信息 | 可选，默认 `https://rpc.xlayer.tech` |
+| `OKX_XLAYER_API_KEY` | OKX X Layer Explorer API key，用来在 Ankr X Layer 钱包索引失败时读取地址普通交易列表 | 可选但建议配置 |
+| `OKX_XLAYER_API_SECRET` | OKX X Layer Explorer API secret，用来服务端签名请求 | 可选但建议配置，只能放服务端 |
+| `OKX_XLAYER_API_PASSPHRASE` | 创建 OKX X Layer Explorer API key 时填写的 passphrase | 可选但建议配置，只能放服务端 |
+| `OKX_XLAYER_EXPLORER_API_URL` | OKX X Layer Explorer 上游地址 | 可选，默认官方 `normal-transaction-list` 接口；只允许 `https://web3.okx.com/api/v5/xlayer/` |
 | `ETHERSCAN_API_KEY` | Explorer 钱包交易索引备选 | 可选；免费计划可能不支持 BSC |
 | `ACCESS_PASSWORD` | 私人访问码，保护未登录旧路径的 API 额度和首个管理员初始化 | 私人部署必须配置 |
 | `CRON_SECRET` | 保护 Vercel Cron 自动刷新接口 | 私人部署必须配置 |
@@ -36,7 +40,8 @@
 ```text
 Ankr：负责在 BNB Chain 和 X Layer 上按钱包找交易
 Chainstack：负责解析 BNB Chain 交易和 BNB Chain RPC 兜底
-X Layer RPC：负责解析 X Layer 交易；交易发现仍优先走 Ankr
+OKX X Layer Explorer API：当 Ankr X Layer 钱包索引不可用时，负责按钱包读取 X Layer 普通交易列表
+X Layer RPC：负责解析 X Layer 交易；交易发现优先走 Ankr，其次走 OKX X Layer Explorer API
 Explorer：备选索引，不作为主依赖
 ```
 
@@ -50,7 +55,7 @@ Explorer：备选索引，不作为主依赖
 6. 发起 Vercel Production 部署。
 7. 部署完成后记录生产 URL。
 8. 做 API 保护验证。
-9. 做 Ankr 钱包索引验证。
+9. 做 Ankr 钱包索引验证；如果配置了 OKX X Layer Explorer API，同时验证 `/api/explorer?chain=xlayer` 可返回 `code: "0"`。
 10. 做页面加载验证。
 11. 做 Supabase 邀请码创建、邀请注册、登录、`/api/archive` 读写验证；没有管理员账号时先用私有访问码创建首个管理员邀请码，之后用管理员登录态管理邀请。
 12. 验证 active 登录用户不填写私有访问码也能调用 `/api/rpc`、`/api/ankr`、`/api/explorer`。
@@ -68,19 +73,20 @@ Explorer：备选索引，不作为主依赖
 2. 不带访问码且未登录请求 `/api/rpc` 会返回拒绝访问。
 3. 带正确访问码请求 `/api/ankr` 能返回 BSC 钱包交易索引结果。
 4. 带正确访问码请求 `/api/rpc` 能返回最新区块。
-5. 登录 active 用户不填写私有访问码，也能调用 `/api/rpc`。
-6. 页面能正常进入钱包总览。
-7. 页面不会要求用户填写 Ankr、Chainstack 或 Etherscan 密钥。
-8. 飞书提醒只使用登录用户在偏好设置保存的个人 Webhook。
-9. 飞书 Webhook 只允许 `open.feishu.cn` 或 `open.larksuite.com` 的官方机器人地址。
-10. 登录用户刷新页面或 Vercel 重新部署后，钱包列表和已归档结果能从 Supabase `/api/archive` 恢复。
-11. 登录用户超过钱包上限时，服务端拒绝保存归档，前端停止扫描和同步。
-12. 管理员用户管理可查看用户、调整钱包上限、禁用和重新启用账号。
-13. 禁用账号后，该账号不能继续调用受保护扫描接口。
-14. Vercel Cron 配置为 `5 0 * * *`，对应北京时间 08:05。
-15. Cron 请求必须通过 `CRON_SECRET` 或私有访问码验证。
-16. `CRON_SECRET` 在用户管理 API 中只作为救援创建邀请码使用，不能直接列用户、撤销邀请码或修改用户。
-16. Cron 对 Supabase 工作区只使用工作区所属用户的飞书配置；未配置时不发送飞书。
+5. 如果配置了 OKX X Layer Explorer API，带正确访问码请求 `/api/explorer?chain=xlayer` 能返回 OKX 官方 X Layer 地址交易列表结构。
+6. 登录 active 用户不填写私有访问码，也能调用 `/api/rpc`。
+7. 页面能正常进入钱包总览。
+8. 页面不会要求用户填写 Ankr、Chainstack、Etherscan 或 OKX X Layer API 密钥。
+9. 飞书提醒只使用登录用户在偏好设置保存的个人 Webhook。
+10. 飞书 Webhook 只允许 `open.feishu.cn` 或 `open.larksuite.com` 的官方机器人地址。
+11. 登录用户刷新页面或 Vercel 重新部署后，钱包列表和已归档结果能从 Supabase `/api/archive` 恢复。
+12. 登录用户超过钱包上限时，服务端拒绝保存归档，前端停止扫描和同步。
+13. 管理员用户管理可查看用户、调整钱包上限、禁用和重新启用账号。
+14. 禁用账号后，该账号不能继续调用受保护扫描接口。
+15. Vercel Cron 配置为 `5 0 * * *`，对应北京时间 08:05。
+16. Cron 请求必须通过 `CRON_SECRET` 或私有访问码验证。
+17. `CRON_SECRET` 在用户管理 API 中只作为救援创建邀请码使用，不能直接列用户、撤销邀请码或修改用户。
+18. Cron 对 Supabase 工作区只使用工作区所属用户的飞书配置；未配置时不发送飞书。
 
 ## 私人部署边界
 
@@ -103,7 +109,7 @@ Explorer：备选索引，不作为主依赖
 
 Chainstack 是标准 RPC，适合解析 BNB Chain 交易和兜底扫 logs；Ankr Advanced 提供钱包交易索引，适合快速找到某个钱包在 BNB Chain 和 X Layer 的交易 hash。
 
-两者不是二选一。最优组合是 Ankr 找交易，标准 RPC 解析交易。X Layer 公共 RPC 对 `eth_getLogs` 区间限制较小，所以不把它作为 10 天钱包扫链兜底。
+两者不是二选一。最优组合是 Ankr 找交易，标准 RPC 解析交易。X Layer 公共 RPC 不适合当作 10 天钱包扫链兜底；如果 Ankr 的 X Layer 钱包索引临时不可用，就用 OKX X Layer Explorer API 做地址交易索引兜底。
 
 ### 为什么 Explorer 会失败？
 

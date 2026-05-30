@@ -1,6 +1,6 @@
 export type ChainId = "bsc" | "xlayer";
 export type TokenGroup = "group1" | "group2" | "other";
-export type ExplorerApiStyle = "etherscan-v2" | "etherscan-legacy";
+export type ExplorerApiStyle = "etherscan-v2" | "etherscan-legacy" | "okx-xlayer";
 export type TxDiscoverySource = "archive" | "import" | "ankr" | "explorer" | "rpc" | "multi-chain";
 export type BoostRuleVersion = "legacy-2026-05-11" | "current-2026-05-12";
 
@@ -112,6 +112,7 @@ export type CalculateInput = {
   endDate: string;
   chain: ChainConfig;
   apiKey?: string;
+  serviceAccessPassword?: string;
   rpcUrl?: string;
   ankrMultichainRpcUrl?: string;
   walletTransactions?: WalletTransaction[];

@@ -516,7 +516,10 @@ async function discoverOkxHashes(params: {
     }
   }
 
-  if (params.input.apiKey && params.input.chain.explorerApiUrl) {
+  const canUseExplorerIndex =
+    Boolean(params.input.chain.explorerApiUrl) &&
+    (Boolean(params.input.apiKey) || params.input.chain.explorerApiStyle === "okx-xlayer");
+  if (canUseExplorerIndex) {
     try {
       params.input.onProgress?.(
         `通过 Explorer 钱包交易索引筛选 OKX Router 交易，区块 ${params.startBlock}-${params.endBlock}...`,
@@ -526,7 +529,8 @@ async function discoverOkxHashes(params: {
         address: params.address,
         startBlock: params.startBlock,
         endBlock: params.endBlock,
-        apiKey: params.input.apiKey,
+        apiKey: params.input.apiKey || "__server__",
+        serviceAccessPassword: params.input.serviceAccessPassword,
       });
       params.input.onProgress?.(`Explorer 钱包索引完成：${hashes.length} 个候选 OKX hash`);
       return { hashes, source: "explorer" };

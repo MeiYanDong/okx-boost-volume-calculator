@@ -31,6 +31,10 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
   }
 
   const url = requestUrl(request);
+  const runConfig = {
+    ...config,
+    publicOrigin: publicOriginFromRequest(request, url, env),
+  };
   const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
   const requestedWorkspace = url.searchParams.get("workspace") || headerValue(request.headers, "x-okx-boost-workspace");
   const workspaces = await resolveCronWorkspaces(env, requestedWorkspace, { upstashConfigured, supabaseConfigured });
@@ -42,7 +46,7 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
     try {
       const result = await runDailyRefresh({
         archive: workspace.archive,
-        config,
+        config: runConfig,
         onProgress: (message) => {
           console.log(`[daily-refresh][${workspace.provider}:${workspaceId}] ${message}`);
         },
@@ -270,4 +274,15 @@ function headerValue(headers, name) {
   const value = headers?.[name.toLowerCase()] || headers?.[name];
   if (Array.isArray(value)) return value[0] || "";
   return String(value || "");
+}
+
+function publicOriginFromRequest(request, url, env) {
+  const explicitOrigin = String(env.PUBLIC_APP_ORIGIN || env.APP_ORIGIN || "").trim();
+  if (explicitOrigin) return explicitOrigin.replace(/\/+$/, "");
+  const forwardedHost = headerValue(request.headers, "x-forwarded-host");
+  const host = forwardedHost || headerValue(request.headers, "host") || String(env.VERCEL_URL || "").trim();
+  if (!host) return "";
+  const forwardedProto = headerValue(request.headers, "x-forwarded-proto");
+  const protocol = forwardedProto || (env.VERCEL || env.VERCEL_ENV ? "https" : url.protocol.replace(":", "") || "http");
+  return `${protocol}://${host}`.replace(/\/+$/, "");
 }

@@ -93,6 +93,8 @@
   子 todo：[S43 OKB / USDt0 基础倍率特例](./todos/2026-05-24-okb-usdt0-rule-fix.md)
 - [x] S44 修复 X Layer 索引失败时的同窗口归档复用
   子 todo：[S44 X Layer 索引失败归档复用](./todos/2026-05-30-xlayer-index-archive-reuse.md)
+- [x] S45 接入 OKX X Layer Explorer API 索引兜底
+  子 todo：[S45 OKX X Layer Explorer API 索引兜底](./todos/2026-05-30-okx-xlayer-explorer-fallback.md)
 
 ## 维护规则
 
