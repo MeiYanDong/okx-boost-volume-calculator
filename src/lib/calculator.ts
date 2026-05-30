@@ -211,14 +211,17 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
         });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (canReusePreviousChainArchive(input, previousResult, hasSameWindow)) {
-      input.onProgress?.(`${input.chain.name} 索引不可用，沿用同窗口原归档`);
+    if (canReusePreviousChainArchive(input, previousResult, days)) {
+      input.onProgress?.(`${input.chain.name} 索引不可用，沿用可兼容的原归档`);
       return reusePreviousChainArchive({
         chain: input.chain,
         previousResult: previousResult!,
+        days,
+        startSeconds,
+        endSeconds,
         startBlock,
-        endBlock,
-        warning: `${input.chain.name} 交易发现失败，已沿用该链同窗口原归档：${message}`,
+        scanStartBlock,
+        warning: `${input.chain.name} 交易发现失败，已沿用该链可兼容原归档：${message}`,
       });
     }
     throw error;
@@ -347,9 +350,10 @@ function previousResultForChain(previousResult: CalculationResult | undefined, c
 function canReusePreviousChainArchive(
   input: CalculateInput,
   previousResult: CalculationResult | undefined,
-  hasSameWindow: boolean,
+  days: string[],
 ): boolean {
-  if (!previousResult || !hasSameWindow || input.forceRefresh) return false;
+  if (!previousResult || !input.incrementalRefresh || input.forceRefresh) return false;
+  if (!windowsOverlap(previousResult.windowStart, previousResult.windowEnd, days[0], days[days.length - 1])) return false;
   const hasChainScan = Boolean(previousResult.chainScans?.[input.chain.id]);
   const hasChainSwaps = previousResult.swaps.some((swap) => (swap.chainId || "bsc") === input.chain.id);
   return hasChainScan || hasChainSwaps;
@@ -358,32 +362,69 @@ function canReusePreviousChainArchive(
 function reusePreviousChainArchive(params: {
   chain: ChainConfig;
   previousResult: CalculationResult;
+  days: string[];
+  startSeconds: number;
+  endSeconds: number;
   startBlock: number;
-  endBlock: number;
+  scanStartBlock: number;
   warning: string;
 }): CalculationResult {
   const scan = params.previousResult.chainScans?.[params.chain.id];
-  const txHashes = scan?.txHashes || params.previousResult.txHashes;
+  const windowSwaps = dedupeSwaps(filterSwapsForWindow(params.previousResult.swaps, params.startSeconds, params.endSeconds));
+  const txHashes = windowSwaps.map((swap) => swap.hash);
+  const dailyRows = buildDailyRows(params.days, windowSwaps);
+  const totalBoostVolume = dailyRows.reduce((sum, row) => sum + row.boostVolume, 0);
+  const totalTradeUsd = dailyRows.reduce((sum, row) => sum + row.tradeUsd, 0);
+  const scannedToBlock = scan?.scannedToBlock ?? params.previousResult.scannedToBlock;
   return {
     ...params.previousResult,
-    warnings: [...params.previousResult.warnings, params.warning],
+    windowStart: params.days[0],
+    windowEnd: params.days[params.days.length - 1],
+    averageBoostVolume: totalBoostVolume / 10,
+    totalBoostVolume,
+    totalTradeUsd,
+    dailyRows: [...dailyRows].reverse(),
+    swaps: windowSwaps.sort((a, b) => b.timestamp - a.timestamp),
+    warnings: [params.warning],
     scannedFromBlock: scan?.scannedFromBlock ?? params.previousResult.scannedFromBlock ?? params.startBlock,
-    scannedToBlock: scan?.scannedToBlock ?? params.previousResult.scannedToBlock,
-    incrementalFromBlock: params.endBlock,
+    scannedToBlock,
+    incrementalFromBlock: params.scanStartBlock,
     incrementalNewTxCount: 0,
     txDiscoverySource: "archive",
     txHashes,
     chainScans: {
       [params.chain.id]: {
         scannedFromBlock: scan?.scannedFromBlock ?? params.previousResult.scannedFromBlock ?? params.startBlock,
-        scannedToBlock: scan?.scannedToBlock ?? params.previousResult.scannedToBlock,
-        incrementalFromBlock: params.endBlock,
+        scannedToBlock,
+        incrementalFromBlock: params.scanStartBlock,
         incrementalNewTxCount: 0,
         txDiscoverySource: "archive",
         txHashes,
       },
     },
   };
+}
+
+function buildDailyRows(days: string[], swaps: CalculationResult["swaps"]): DailyBoostRow[] {
+  const dailyRows = days.map<DailyBoostRow>((date) => ({
+    date,
+    txCount: 0,
+    boostVolume: 0,
+    tradeUsd: 0,
+  }));
+  const dailyMap = new Map(dailyRows.map((row) => [row.date, row]));
+  for (const swap of swaps) {
+    const row = dailyMap.get(swap.utcDate);
+    if (!row) continue;
+    row.txCount += swap.status === "counted" ? 1 : 0;
+    row.boostVolume += swap.boostVolume;
+    row.tradeUsd += swap.tradeUsd || 0;
+  }
+  return dailyRows;
+}
+
+function windowsOverlap(previousStart: string, previousEnd: string, currentStart: string, currentEnd: string): boolean {
+  return previousStart <= currentEnd && previousEnd >= currentStart;
 }
 
 function mergeTxHashes(existing: string[], incoming: string[]): string[] {
