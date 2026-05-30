@@ -2,7 +2,7 @@ import { normalizeAddress } from "./chains";
 import { BOOST_RULE_CACHE_VERSION } from "./boostRules";
 import type { ChainConfig, ParsedSwap } from "./types";
 
-const CACHE_PREFIX = "okx-boost:v5";
+const CACHE_PREFIX = "okx-boost:v6";
 const TX_HASHES_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PARSED_SWAP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -103,7 +103,13 @@ function writeCache<T>(key: string, value: T, ttlMs: number) {
 
 function safeStorage(): Storage | null {
   try {
-    return globalThis.localStorage || null;
+    const storage = globalThis.localStorage;
+    return storage &&
+      typeof storage.getItem === "function" &&
+      typeof storage.setItem === "function" &&
+      typeof storage.removeItem === "function"
+      ? storage
+      : null;
   } catch {
     return null;
   }

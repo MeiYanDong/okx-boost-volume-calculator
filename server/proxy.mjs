@@ -223,7 +223,7 @@ export function applySecurityHeaders(response, isProduction = false) {
   if (isProduction) {
     response.setHeader(
       "content-security-policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://rpc.xlayer.tech; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     );
   }
 }
@@ -299,6 +299,15 @@ function headerValue(headers, name) {
 }
 
 function validateRpcBody(body) {
+  if (Array.isArray(body)) {
+    if (!body.length || body.length > 20) throw new Error("Invalid JSON-RPC batch size");
+    for (const item of body) validateSingleRpcBody(item);
+    return;
+  }
+  validateSingleRpcBody(body);
+}
+
+function validateSingleRpcBody(body) {
   if (!isObject(body)) throw new Error("Invalid JSON-RPC body");
   if (body.jsonrpc !== "2.0" || typeof body.method !== "string" || !Array.isArray(body.params)) {
     throw new Error("Invalid JSON-RPC request");

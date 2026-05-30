@@ -4,11 +4,11 @@
 
 ## 当前阶段
 
-S45：OKX X Layer Explorer API 索引兜底已完成。
+S46：X Layer 增量链上兜底与旧归档误报修复已完成。
 
-S45 在 Ankr Advanced `xlayer` 钱包索引返回 `No nodes available` 时，增加 OKX 官方 X Layer Explorer API 地址普通交易列表兜底。OKX API 凭证只放服务端环境变量，浏览器和文档不暴露密钥；每日 Cron 也能通过同源代理调用该索引。
+S46 修复 X Layer 索引失败后把旧归档写成“新增 0”的错误。已有归档的小范围增量可以使用低并发 RPC Transfer 日志兜底；如果无法扫到最新区块，则失败并保留旧归档，不再写入伪成功结果。12、13 钱包已完成生产网页验证并写入 Supabase。
 
-子 plan：[S45 OKX X Layer Explorer API 索引兜底](./plans/2026-05-30-okx-xlayer-explorer-fallback.md)
+子 plan：[S46 X Layer 增量链上兜底与旧归档误报修复](./plans/2026-05-31-xlayer-incremental-rpc-fallback.md)
 
 ## 阶段索引
 
@@ -60,6 +60,7 @@ S45 在 Ankr Advanced `xlayer` 钱包索引返回 `No nodes available` 时，增
 | S43 OKB / USDt0 基础倍率特例 | 已完成 | [子 plan](./plans/2026-05-24-okb-usdt0-rule-fix.md) | 修复 X Layer 原生 OKB 与 USDt0 交易被误按 `0.5x` 计算的问题 |
 | S44 X Layer 索引失败归档复用 | 已完成 | [子 plan](./plans/2026-05-30-xlayer-index-archive-reuse.md) | X Layer 钱包索引不可用时沿用可兼容原归档，其他链可继续增量刷新 |
 | S45 OKX X Layer Explorer API 索引兜底 | 已完成 | [子 plan](./plans/2026-05-30-okx-xlayer-explorer-fallback.md) | Ankr X Layer 索引不可用时改用 OKX 官方地址交易索引 |
+| S46 X Layer 增量链上兜底与旧归档误报修复 | 已完成 | [子 plan](./plans/2026-05-31-xlayer-incremental-rpc-fallback.md) | 索引失败时对小范围增量低速链扫，失败时不再把旧归档写成成功 |
 
 ## 执行原则
 

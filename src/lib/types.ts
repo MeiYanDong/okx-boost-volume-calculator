@@ -18,8 +18,17 @@ export type ChainConfig = {
   chainId: number;
   etherscanChainId: number;
   rpcUrl: string;
+  rpcAccessHeadersEnabled?: boolean;
   rpcLogChunkSize: number;
+  rpcLogAddressFilter?: string[];
   rpcLogFallbackEnabled?: boolean;
+  rpcIncrementalFallbackEnabled?: boolean;
+  rpcIncrementalFallbackMaxBlocks?: number;
+  rpcLogConcurrency?: number;
+  rpcLogTopicConcurrency?: number;
+  rpcLogRequestDelayMs?: number;
+  rpcLogBatchChunkCount?: number;
+  rpcTxFilterConcurrency?: number;
   explorerApiUrl: string;
   explorerApiStyle: ExplorerApiStyle;
   explorerTxUrl: string;

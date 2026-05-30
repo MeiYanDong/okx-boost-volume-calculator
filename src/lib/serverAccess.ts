@@ -46,7 +46,13 @@ function readAuthAccessState(): { token: string; hasSession: boolean } {
 
 function safeStorage(): Storage | null {
   try {
-    return globalThis.localStorage || null;
+    const storage = globalThis.localStorage;
+    return storage &&
+      typeof storage.getItem === "function" &&
+      typeof storage.setItem === "function" &&
+      typeof storage.removeItem === "function"
+      ? storage
+      : null;
   } catch {
     return null;
   }

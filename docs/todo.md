@@ -95,6 +95,8 @@
   子 todo：[S44 X Layer 索引失败归档复用](./todos/2026-05-30-xlayer-index-archive-reuse.md)
 - [x] S45 接入 OKX X Layer Explorer API 索引兜底
   子 todo：[S45 OKX X Layer Explorer API 索引兜底](./todos/2026-05-30-okx-xlayer-explorer-fallback.md)
+- [x] S46 修复 X Layer 增量旧归档误报
+  子 todo：[S46 X Layer 增量链上兜底与旧归档误报修复](./todos/2026-05-31-xlayer-incremental-rpc-fallback.md)
 
 ## 维护规则
 

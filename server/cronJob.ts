@@ -230,6 +230,7 @@ function buildServerChains(config: ProxyConfig): ChainConfig[] {
       return {
         ...chain,
         rpcUrl: config.xlayerRpcUrl || chain.rpcUrl,
+        rpcAccessHeadersEnabled: false,
         explorerApiUrl: absoluteUrl(config.publicOrigin, chain.explorerApiUrl),
       };
     }

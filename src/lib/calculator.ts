@@ -211,7 +211,7 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
         });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (canReusePreviousChainArchive(input, previousResult, days)) {
+    if (canReusePreviousChainArchive(input, previousResult, days, endBlock)) {
       input.onProgress?.(`${input.chain.name} 索引不可用，沿用可兼容的原归档`);
       return reusePreviousChainArchive({
         chain: input.chain,
@@ -351,9 +351,11 @@ function canReusePreviousChainArchive(
   input: CalculateInput,
   previousResult: CalculationResult | undefined,
   days: string[],
+  endBlock: number,
 ): boolean {
   if (!previousResult || !input.incrementalRefresh || input.forceRefresh) return false;
   if (!windowsOverlap(previousResult.windowStart, previousResult.windowEnd, days[0], days[days.length - 1])) return false;
+  if (typeof previousResult.scannedToBlock !== "number" || previousResult.scannedToBlock < endBlock) return false;
   const hasChainScan = Boolean(previousResult.chainScans?.[input.chain.id]);
   const hasChainSwaps = previousResult.swaps.some((swap) => (swap.chainId || "bsc") === input.chain.id);
   return hasChainScan || hasChainSwaps;
@@ -542,9 +544,10 @@ async function discoverOkxHashes(params: {
     }
   }
 
-  if (params.input.chain.rpcLogFallbackEnabled === false) {
+  const rpcFallbackStatus = rpcFallbackStatusFor(params.input, params.startBlock, params.endBlock);
+  if (!rpcFallbackStatus.enabled) {
     const detail = indexErrors.length ? ` 当前索引失败：${indexErrors.join("；")}` : "";
-    throw new Error(`${params.input.chain.name} 需要可用的钱包交易索引。${detail}。该链已禁用 RPC Transfer 日志兜底。`);
+    throw new Error(`${params.input.chain.name} 需要可用的钱包交易索引。${detail}。${rpcFallbackStatus.reason}`);
   }
 
   try {
@@ -564,6 +567,33 @@ async function discoverOkxHashes(params: {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`RPC 公开链上记录读取失败：${message}`);
   }
+}
+
+function rpcFallbackStatusFor(input: CalculateInput, startBlock: number, endBlock: number): { enabled: boolean; reason: string } {
+  if (input.chain.rpcLogFallbackEnabled !== false) {
+    return { enabled: true, reason: "" };
+  }
+  const blockCount = Math.max(0, endBlock - startBlock + 1);
+  const maxBlocks = input.chain.rpcIncrementalFallbackMaxBlocks || 0;
+  const canUseIncrementalFallback =
+    Boolean(input.chain.rpcIncrementalFallbackEnabled) &&
+    Boolean(input.incrementalRefresh) &&
+    Boolean(input.previousResult) &&
+    maxBlocks > 0 &&
+    blockCount <= maxBlocks;
+  if (canUseIncrementalFallback) {
+    return { enabled: true, reason: "" };
+  }
+  if (!input.chain.rpcIncrementalFallbackEnabled) {
+    return { enabled: false, reason: "该链已禁用 RPC Transfer 日志兜底。" };
+  }
+  if (!input.incrementalRefresh || !input.previousResult) {
+    return { enabled: false, reason: "该链只允许已有归档上的小范围增量 RPC 兜底，避免全窗口慢扫误伤公共节点。" };
+  }
+  return {
+    enabled: false,
+    reason: `本次需要兜底扫描 ${blockCount} 个区块，超过该链增量 RPC 上限 ${maxBlocks} 个区块。`,
+  };
 }
 
 function filterWalletOkxHashes(params: {

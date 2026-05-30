@@ -63,9 +63,13 @@ export class RpcClient {
       const controller = new AbortController();
       const timeout = globalThis.setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
       try {
+        const headers =
+          this.chain.rpcAccessHeadersEnabled === false
+            ? { "content-type": "application/json" }
+            : serverAccessHeaders({ "content-type": "application/json" });
         const response = await fetch(this.rpcUrl, {
           method: "POST",
-          headers: serverAccessHeaders({ "content-type": "application/json" }),
+          headers,
           body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
           signal: controller.signal,
         });
@@ -87,7 +91,66 @@ export class RpcClient {
             : error;
         lastError = normalizedError;
         if (attempt >= RPC_MAX_RETRIES || !isRetryableRpcError(normalizedError)) throw normalizedError;
-        await sleep(RPC_RETRY_BACKOFF_MS * (attempt + 1));
+        await sleep(rpcRetryBackoffMs(normalizedError, attempt));
+      } finally {
+        globalThis.clearTimeout(timeout);
+      }
+    }
+    throw lastError;
+  }
+
+  async batchRequest<T>(calls: Array<{ method: string; params: unknown[] }>): Promise<T[]> {
+    if (!calls.length) return [];
+    if (calls.length === 1) return [await this.request<T>(calls[0].method, calls[0].params)];
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= RPC_MAX_RETRIES; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = globalThis.setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
+      try {
+        const headers =
+          this.chain.rpcAccessHeadersEnabled === false
+            ? { "content-type": "application/json" }
+            : serverAccessHeaders({ "content-type": "application/json" });
+        const batch = calls.map((call, index) => ({
+          jsonrpc: "2.0",
+          id: index + 1,
+          method: call.method,
+          params: call.params,
+        }));
+        const response = await fetch(this.rpcUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(batch),
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new RpcRequestError(
+            errorMessage(payload.error || payload.message || `batch HTTP ${response.status}`),
+            response.status,
+          );
+        }
+        if (!Array.isArray(payload)) {
+          if (payload.error) throw new RpcRequestError(errorMessage(payload.error.message || payload.error));
+          throw new RpcRequestError("RPC batch returned non-array response");
+        }
+
+        const byId = new Map<number, unknown>(payload.map((item) => [Number(item?.id), item]));
+        return batch.map((request) => {
+          const item = byId.get(Number(request.id)) as { result?: T; error?: unknown } | undefined;
+          if (!item) throw new RpcRequestError(`RPC batch missing response for id ${request.id}`);
+          if (item.error) throw new RpcRequestError(errorMessage((item.error as { message?: unknown })?.message || item.error));
+          return item.result as T;
+        });
+      } catch (error) {
+        const normalizedError =
+          error instanceof Error && error.name === "AbortError"
+            ? new RpcRequestError(`batch timed out after ${RPC_REQUEST_TIMEOUT_MS / 1000}s`)
+            : error;
+        lastError = normalizedError;
+        if (attempt >= RPC_MAX_RETRIES || !isRetryableRpcError(normalizedError)) throw normalizedError;
+        await sleep(rpcRetryBackoffMs(normalizedError, attempt));
       } finally {
         globalThis.clearTimeout(timeout);
       }
@@ -156,6 +219,10 @@ export class RpcClient {
     return this.request<RpcLog[]>("eth_getLogs", [filter]);
   }
 
+  async getLogsBatch(filters: GetLogsFilter[]): Promise<RpcLog[][]> {
+    return this.batchRequest<RpcLog[]>(filters.map((filter) => ({ method: "eth_getLogs", params: [filter] })));
+  }
+
   async call(to: string, data: string): Promise<string | null> {
     try {
       return await this.request<string>("eth_call", [{ to, data }, "latest"]);
@@ -222,6 +289,15 @@ function isRetryableRpcError(error: unknown): boolean {
     "socket hang up",
     "econnreset",
   ].some((needle) => message.includes(needle));
+}
+
+function rpcRetryBackoffMs(error: unknown, attempt: number): number {
+  const message = errorMessage(error).toLowerCase();
+  const isRateLimited =
+    (error instanceof RpcRequestError && error.statusCode === 429) ||
+    message.includes("rate limit") ||
+    message.includes("too many request");
+  return (isRateLimited ? 5_000 : RPC_RETRY_BACKOFF_MS) * (attempt + 1);
 }
 
 function sleep(ms: number): Promise<void> {
