@@ -3699,25 +3699,10 @@ function syncWalletRecords(
       };
     }
     if (existing && existing.result && existing.source === "archive") {
-      if (existing.result.windowEnd !== endDate) {
-        return {
-          address,
-          name,
-          state: "idle",
-          source: "archive",
-          result: null,
-          progress: "Supabase 云端归档待刷新",
-          error: "",
-          savedAt: existing.savedAt,
-        };
-      }
       return {
         ...existing,
         name,
-        progress:
-          existing.result.windowEnd === endDate
-            ? existing.progress || "已从 Supabase 云端归档恢复"
-            : existing.progress || "Supabase 云端归档待刷新",
+        progress: existing.progress || "已从 Supabase 云端归档恢复",
       };
     }
     if (existing && existing.result && existing.source === "fresh" && existing.result.windowEnd === endDate) {
@@ -4070,10 +4055,10 @@ function hydrateRecordsFromServerArchive(
       return {
         address: entry.address,
         name: entry.name || archived.name || "",
-        state: "idle",
+        state: "done",
         source: "archive",
-        result: null,
-        progress: "Supabase 云端归档待刷新",
+        result: archived.result,
+        progress: archived.result.windowEnd === endDate ? "已从 Supabase 云端归档恢复" : "已从 Supabase 云端归档恢复，按当前快照日重算展示",
         error: "",
         savedAt: archived.savedAt,
       };

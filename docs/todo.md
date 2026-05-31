@@ -99,6 +99,8 @@
   子 todo：[S46 X Layer 增量链上兜底与旧归档误报修复](./todos/2026-05-31-xlayer-incremental-rpc-fallback.md)
 - [x] S47 修复钱包详情每日数据日期范围
   子 todo：[S47 钱包详情每日数据窗口口径修复](./todos/2026-05-31-wallet-detail-date-window.md)
+- [x] S48 修复旧归档被隐藏成待重扫
+  子 todo：[S48 归档窗口错位数据隐藏修复](./todos/2026-05-31-archive-window-reuse-fix.md)
 
 ## 维护规则
 
