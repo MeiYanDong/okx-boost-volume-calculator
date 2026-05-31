@@ -997,6 +997,7 @@ export default function App() {
         {selectedRecord?.result && (
           <WalletDetailDrawer
             record={selectedRecord}
+            endDate={endDate}
             bonusRules={boostOverrides}
             onBonusRulesChange={updateBonusOverrides}
             onRefresh={() => scanWallet(selectedRecord.address, { refresh: true })}
@@ -2963,6 +2964,7 @@ function MetricPanel({
 
 function WalletDetailDrawer({
   record,
+  endDate,
   bonusRules,
   onBonusRulesChange,
   onRefresh,
@@ -2972,6 +2974,7 @@ function WalletDetailDrawer({
   onClose,
 }: {
   record: WalletArchiveRecord;
+  endDate: string;
   bonusRules: string;
   onBonusRulesChange: (value: string) => void;
   onRefresh: () => void;
@@ -2982,7 +2985,7 @@ function WalletDetailDrawer({
 }) {
   const [detailTab, setDetailTab] = useState<DetailTab>("daily");
   if (!record.result) return null;
-  const result = record.result;
+  const result = calculationResultForDisplayWindow(record.result, endDate);
   const bonusRows = buildTokenBonusRows(result, bonusRules, record.address);
   const warnings = visibleWarnings(result.warnings);
   const countedSwaps = result.swaps.filter((swap) => swap.status === "counted");
@@ -3242,6 +3245,33 @@ function WalletDetailDrawer({
 function dailyBoostPercent(boostVolume: number, maxDailyBoost: number): number {
   if (boostVolume <= 0 || maxDailyBoost <= 0) return 0;
   return Math.max(3, Math.min(100, (boostVolume / maxDailyBoost) * 100));
+}
+
+function calculationResultForDisplayWindow(result: CalculationResult, endDate: string): CalculationResult {
+  if (!isUtcDate(endDate)) return result;
+  const { days } = buildUtcWindow(endDate);
+  const daySet = new Set(days);
+  const sourceDailyRows = new Map(result.dailyRows.map((row) => [row.date, row]));
+  const dailyRows = days
+    .map((date) => {
+      const row = sourceDailyRows.get(date);
+      return row ? { ...row } : { date, txCount: 0, boostVolume: 0, tradeUsd: 0 };
+    })
+    .reverse();
+  const swaps = result.swaps.filter((swap) => daySet.has(swap.utcDate)).sort((a, b) => b.timestamp - a.timestamp);
+  const totalBoostVolume = dailyRows.reduce((sum, row) => sum + row.boostVolume, 0);
+  const totalTradeUsd = dailyRows.reduce((sum, row) => sum + row.tradeUsd, 0);
+
+  return {
+    ...result,
+    windowStart: days[0],
+    windowEnd: days[days.length - 1],
+    averageBoostVolume: totalBoostVolume / 10,
+    totalBoostVolume,
+    totalTradeUsd,
+    dailyRows,
+    swaps,
+  };
 }
 
 function swapStatusLabel(status: "counted" | "excluded" | "partial"): string {
@@ -3669,6 +3699,18 @@ function syncWalletRecords(
       };
     }
     if (existing && existing.result && existing.source === "archive") {
+      if (existing.result.windowEnd !== endDate) {
+        return {
+          address,
+          name,
+          state: "idle",
+          source: "archive",
+          result: null,
+          progress: "Supabase 云端归档待刷新",
+          error: "",
+          savedAt: existing.savedAt,
+        };
+      }
       return {
         ...existing,
         name,
@@ -4028,9 +4070,9 @@ function hydrateRecordsFromServerArchive(
       return {
         address: entry.address,
         name: entry.name || archived.name || "",
-        state: "done",
+        state: "idle",
         source: "archive",
-        result: archived.result,
+        result: null,
         progress: "Supabase 云端归档待刷新",
         error: "",
         savedAt: archived.savedAt,

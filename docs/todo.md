@@ -97,6 +97,8 @@
   子 todo：[S45 OKX X Layer Explorer API 索引兜底](./todos/2026-05-30-okx-xlayer-explorer-fallback.md)
 - [x] S46 修复 X Layer 增量旧归档误报
   子 todo：[S46 X Layer 增量链上兜底与旧归档误报修复](./todos/2026-05-31-xlayer-incremental-rpc-fallback.md)
+- [x] S47 修复钱包详情每日数据日期范围
+  子 todo：[S47 钱包详情每日数据窗口口径修复](./todos/2026-05-31-wallet-detail-date-window.md)
 
 ## 维护规则
 
