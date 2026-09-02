@@ -10,7 +10,7 @@
 - [x] Upgrade the vulnerable Vite toolchain and make `npm audit --audit-level=high` pass.
 - [x] Add the Node 24 GitHub Actions quality workflow.
 - [x] Add the source-of-truth ADR and production smoke command.
-- [ ] Push the review branch and open a pull request.
-- [ ] Verify `Quality / quality` on GitHub.
-- [ ] Configure the required `Quality / quality` branch check, or record the exact blocker.
-- [ ] Confirm production remains in RPC-paused mode.
+- [x] Push the review branch and open PR #1.
+- [x] Verify `Quality / quality` on GitHub.
+- [x] Configure `quality` as a strict required check on `main`.
+- [x] Confirm production remains in RPC-paused mode.

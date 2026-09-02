@@ -52,5 +52,13 @@ Acceptance criteria:
 - [x] Critical behavior tests added and passing locally.
 - [x] Local lint, type checking, dependency audit, and build gate added.
 - [x] ADR and production smoke command added.
-- [ ] Pull request CI is green.
-- [ ] Required branch check is enabled or its permission blocker is recorded.
+- [x] Pull request CI is green.
+- [x] Required branch check is enabled or its permission blocker is recorded.
+
+## Evidence
+
+- Review: [PR #1](https://github.com/MeiYanDong/okx-boost-volume-calculator/pull/1), left open for manual merge.
+- CI: [Quality run 33594264391](https://github.com/MeiYanDong/okx-boost-volume-calculator/actions/runs/33594264391), `quality` passed in 28 seconds.
+- Branch policy: `main` requires a strict, current `quality` check and pull request; force pushes and deletion are disabled, including for administrators.
+- Local: `npm run quality` passed with 13/13 tests and zero npm audit vulnerabilities.
+- Runtime: `npm run smoke:production -- --expect-paused` returned homepage 200, Cron paused, and RPC 503.
