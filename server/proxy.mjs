@@ -4,6 +4,8 @@ import { getSupabaseUserFromRequest, getUserNotificationTarget } from "./supabas
 
 const maxBodyBytes = 1_000_000;
 const upstreamTimeoutMs = 25_000;
+const okxMaxAttempts = 5;
+const okxRetryBaseDelayMs = 500;
 const okxXLayerDefaultExplorerApiUrl = "https://web3.okx.com/api/v5/xlayer/address/normal-transaction-list";
 const allowedRpcMethods = new Set([
   "eth_blockNumber",
@@ -22,14 +24,22 @@ export function createProxyConfig(env) {
   );
   return {
     accessPassword: envValue(env, "ACCESS_PASSWORD"),
+    cronSecret: envValue(env, "CRON_SECRET"),
+    activeChains: envValue(env, "ACTIVE_CHAINS", "VITE_ACTIVE_CHAINS") || "xlayer",
+    rpcUsagePaused: envFlag(env, "RPC_USAGE_PAUSED", "OKX_BOOST_RPC_PAUSED"),
+    adminOnlyUsage: envFlag(env, "ADMIN_ONLY_USAGE", "OKX_BOOST_ADMIN_ONLY"),
     bscRpcUrl: rawBscRpcUrl || deriveAnkrBscRpcUrl(rawAnkrMultichainRpcUrl) || "https://bsc-rpc.publicnode.com",
     xlayerRpcUrl: rawXLayerRpcUrl || "https://rpc.xlayer.tech",
     ankrMultichainRpcUrl: rawAnkrMultichainRpcUrl,
     etherscanApiKey: envValue(env, "ETHERSCAN_API_KEY", "VITE_ETHERSCAN_API_KEY"),
     etherscanApiUrl: "https://api.etherscan.io/v2/api",
-    okxXLayerApiKey: envValue(env, "OKX_XLAYER_API_KEY", "OKX_API_KEY"),
-    okxXLayerApiSecret: envValue(env, "OKX_XLAYER_API_SECRET", "OKX_API_SECRET"),
-    okxXLayerApiPassphrase: envValue(env, "OKX_XLAYER_API_PASSPHRASE", "OKX_API_PASSPHRASE"),
+    okxXLayerApiKey: envValueAny(env, ["OKX_XLAYER_API_KEY", "OKX_API_KEY"]),
+    okxXLayerApiSecret: envValueAny(env, ["OKX_XLAYER_API_SECRET", "OKX_API_SECRET", "OKX_SECRET_KEY"]),
+    okxXLayerApiPassphrase: envValueAny(env, [
+      "OKX_XLAYER_API_PASSPHRASE",
+      "OKX_API_PASSPHRASE",
+      "OKX_PASSPHRASE",
+    ]),
     okxXLayerExplorerApiUrl: envValue(env, "OKX_XLAYER_EXPLORER_API_URL") || okxXLayerDefaultExplorerApiUrl,
   };
 }
@@ -46,6 +56,7 @@ export async function handleRpcProxy(request, response, config, env = process.en
     return;
   }
 
+  ensureRpcUsageAllowed(config);
   await validateServiceAccess(request, config, env);
   const body = await readJsonBody(request);
   validateRpcBody(body);
@@ -61,6 +72,7 @@ export async function handleAnkrProxy(request, response, config, env = process.e
     return;
   }
 
+  ensureRpcUsageAllowed(config);
   await validateServiceAccess(request, config, env);
   if (!config.ankrMultichainRpcUrl) {
     sendJson(response, 200, jsonRpcError("Ankr Advanced API is not configured"), { "cache-control": "no-store" });
@@ -79,6 +91,7 @@ export async function handleExplorerProxy(request, response, config, url = reque
     return;
   }
 
+  ensureRpcUsageAllowed(config);
   await validateServiceAccess(request, config, env);
   const chain = explorerProxyChain(url);
   if (chain === "xlayer") {
@@ -146,6 +159,10 @@ export async function handleFeishuNotify(request, response, config, env = proces
   }
 
   const body = await readJsonBody(request);
+  if (body?.mode === "real-data-test") {
+    ensureRpcUsageAllowed(config);
+    await validateServiceAccess(request, config, env);
+  }
   const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
   if (auth?.user?.id) {
     const target = await getUserNotificationTarget(env, auth.user);
@@ -205,6 +222,13 @@ export function handleUnknownApi(response) {
   sendJson(response, 404, { error: "Unknown API endpoint" });
 }
 
+export function ensureRpcUsageAllowed(config) {
+  if (!config.rpcUsagePaused) return;
+  const error = new Error("项目 RPC 使用已暂停，当前不会请求 RPC、Ankr 或 Explorer 上游。");
+  error.statusCode = 503;
+  throw error;
+}
+
 export function sendProxyError(response, error, config) {
   const status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
   sendJson(
@@ -244,6 +268,20 @@ function envValue(env, primary, legacy) {
   return ((env[primary] || (legacy ? env[legacy] : "")) || "").trim();
 }
 
+function envValueAny(env, names) {
+  for (const name of names) {
+    const value = String(env[name] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function envFlag(env, primary, legacy) {
+  const value = envValue(env, primary, legacy);
+  if (!value) return false;
+  return ["1", "true", "yes", "y", "on"].includes(value.toLowerCase());
+}
+
 export function validateAccess(request, config, env = process.env) {
   if (!config.accessPassword) {
     if (isProductionRuntime(env)) {
@@ -262,6 +300,15 @@ export function validateAccess(request, config, env = process.env) {
 }
 
 export async function validateServiceAccess(request, config, env = process.env) {
+  if (hasInternalServiceAccess(request, config)) return;
+  if (config.adminOnlyUsage) {
+    const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
+    if (auth?.profile?.status === "active" && auth.profile.role === "admin") return;
+    const error = new Error("当前项目仅管理员账号可使用扫描、刷新和上游索引功能。");
+    error.statusCode = auth?.user?.id ? 403 : 401;
+    throw error;
+  }
+
   if (!config.accessPassword) {
     if (isProductionRuntime(env)) {
       const error = new Error("ACCESS_PASSWORD is not configured.");
@@ -285,6 +332,12 @@ function hasDirectAccess(request, config) {
   const authorization = headerValue(request.headers, "authorization").replace(/^Bearer\s+/i, "");
   if (direct === config.accessPassword || authorization === config.accessPassword) return true;
   return false;
+}
+
+function hasInternalServiceAccess(request, config) {
+  const expected = String(config.cronSecret || "").trim();
+  if (!expected) return false;
+  return headerValue(request.headers, "x-okx-boost-internal") === expected;
 }
 
 export function isProductionRuntime(env = process.env) {
@@ -399,22 +452,37 @@ async function getJson(url) {
   return fetchJson(url, { method: "GET", headers: { accept: "application/json" } });
 }
 
-async function getOkxSignedJson(url, config) {
-  const timestamp = new Date().toISOString();
-  const requestPath = `${url.pathname}${url.search}`;
-  const signature = createHmac("sha256", config.okxXLayerApiSecret)
-    .update(`${timestamp}GET${requestPath}`)
-    .digest("base64");
-  return fetchJson(url.toString(), {
-    method: "GET",
-    headers: {
-      accept: "application/json",
-      "OK-ACCESS-KEY": config.okxXLayerApiKey,
-      "OK-ACCESS-SIGN": signature,
-      "OK-ACCESS-TIMESTAMP": timestamp,
-      "OK-ACCESS-PASSPHRASE": config.okxXLayerApiPassphrase,
-    },
-  });
+async function getOkxSignedJson(url, config, dependencies = {}) {
+  const fetcher = dependencies.fetchJson || fetchJson;
+  const now = dependencies.now || (() => new Date());
+  const wait = dependencies.delay || delay;
+  const random = dependencies.random || Math.random;
+  for (let attempt = 1; attempt <= okxMaxAttempts; attempt += 1) {
+    const timestamp = now().toISOString();
+    const requestPath = `${url.pathname}${url.search}`;
+    const signature = createHmac("sha256", config.okxXLayerApiSecret)
+      .update(`${timestamp}GET${requestPath}`)
+      .digest("base64");
+    try {
+      return await fetcher(url.toString(), {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          "OK-ACCESS-KEY": config.okxXLayerApiKey,
+          "OK-ACCESS-SIGN": signature,
+          "OK-ACCESS-TIMESTAMP": timestamp,
+          "OK-ACCESS-PASSPHRASE": config.okxXLayerApiPassphrase,
+        },
+      });
+    } catch (error) {
+      if (!shouldRetryOkxRequest(error) || attempt === okxMaxAttempts) throw error;
+      const retryAfterMs = Number(error?.retryAfterMs || 0);
+      const jitterMs = Math.floor(random() * 250);
+      const delayMs = Math.max(retryAfterMs, okxRetryBaseDelayMs * 2 ** (attempt - 1)) + jitterMs;
+      await wait(Math.min(delayMs, 5_000));
+    }
+  }
+  throw new Error("OKX Explorer retry loop ended unexpectedly");
 }
 
 async function fetchJson(url, init) {
@@ -423,16 +491,39 @@ async function fetchJson(url, init) {
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(`Upstream HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`Upstream HTTP ${response.status}`);
+      error.statusCode = response.status;
+      error.retryAfterMs = retryAfterMilliseconds(response.headers.get("retry-after"));
+      throw error;
+    }
     return payload;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Upstream timed out after ${upstreamTimeoutMs / 1000}s`);
+      throw new Error(`Upstream timed out after ${upstreamTimeoutMs / 1000}s`, { cause: error });
     }
     throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function shouldRetryOkxRequest(error) {
+  const status = Number(error?.statusCode || 0);
+  return status === 429 || status === 408 || status >= 500;
+}
+
+function retryAfterMilliseconds(value) {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function jsonRpcError(message) {
@@ -558,3 +649,7 @@ function createFeishuTextPayload(text, config) {
     sign: createHmac("sha256", stringToSign).digest("base64"),
   };
 }
+
+export const proxyTestHelpers = {
+  getOkxSignedJson,
+};

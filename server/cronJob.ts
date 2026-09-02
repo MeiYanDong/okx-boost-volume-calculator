@@ -1,4 +1,4 @@
-import { BSC_CHAIN, CHAINS, chainById, isAddress, normalizeAddress } from "../src/lib/chains";
+import { BSC_CHAIN, activeChainsFromValue, chainById, isAddress, normalizeAddress } from "../src/lib/chains";
 import { buildUtcWindow, calculateBoostVolumeAcrossChains } from "../src/lib/calculator";
 import { formatUsd } from "../src/lib/format";
 import { repriceCalculationResult } from "../src/lib/reprice";
@@ -6,12 +6,16 @@ import type { CalculationResult, ChainConfig, ParsedSwap } from "../src/lib/type
 
 const ADDRESS_PATTERN = /0x[a-fA-F0-9]{40}/g;
 const DEFAULT_TEN_DAY_TARGET = 5000;
-const CRON_SCAN_CONCURRENCY = 1;
+const CRON_SCAN_CONCURRENCY = 3;
+const CRON_SCAN_START_INTERVAL_MS = 350;
 const MAX_SCAN_HISTORY_RECORDS = 200;
 const SNAPSHOT_CONFIRM_TIME_LABEL = "08:00";
+let nextScanStartAt = 0;
 
 type ProxyConfig = {
   accessPassword?: string;
+  cronSecret?: string;
+  activeChains?: string;
   bscRpcUrl?: string;
   xlayerRpcUrl?: string;
   ankrMultichainRpcUrl?: string;
@@ -91,6 +95,7 @@ type CronRunResult = {
     failed: number;
     skipped: number;
   };
+  failures: Array<{ address: string; name: string; error: string }>;
 };
 
 export async function runDailyRefresh(params: {
@@ -115,6 +120,7 @@ export async function runDailyRefresh(params: {
     const startedAtMs = Date.now();
     params.onProgress?.(`刷新 ${entry.name || entry.address} ${snapshotDate}`);
     try {
+      await waitForScanStartSlot();
       const result = await calculateBoostVolumeAcrossChains({
         address: entry.address,
         endDate: snapshotDate,
@@ -122,6 +128,7 @@ export async function runDailyRefresh(params: {
         ankrMultichainRpcUrl: params.config.ankrMultichainRpcUrl,
         apiKey: params.config.etherscanApiKey,
         serviceAccessPassword: params.config.accessPassword,
+        serviceAccessSecret: params.config.cronSecret,
         boostBonuses: {},
         incrementalRefresh: true,
         previousResult: previous?.result || undefined,
@@ -208,7 +215,15 @@ export async function runDailyRefresh(params: {
       failed: failures.length,
       skipped: 0,
     },
+    failures,
   };
+}
+
+async function waitForScanStartSlot() {
+  const scheduledAt = Math.max(Date.now(), nextScanStartAt);
+  nextScanStartAt = scheduledAt + CRON_SCAN_START_INTERVAL_MS;
+  const waitMs = scheduledAt - Date.now();
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
 }
 
 export function cronSnapshotDate(now: Date): string {
@@ -218,7 +233,7 @@ export function cronSnapshotDate(now: Date): string {
 }
 
 function buildServerChains(config: ProxyConfig): ChainConfig[] {
-  return CHAINS.map((chain) => {
+  return activeChainsFromValue(config.activeChains).map((chain) => {
     if (chain.id === "bsc") {
       return {
         ...BSC_CHAIN,

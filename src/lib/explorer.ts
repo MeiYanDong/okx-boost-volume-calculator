@@ -56,6 +56,7 @@ export async function fetchAddressOkxHashes(params: {
   endBlock: number;
   apiKey: string;
   serviceAccessPassword?: string;
+  serviceAccessSecret?: string;
 }): Promise<string[]> {
   const transactions: ExplorerTx[] = [];
   const pageSize = explorerPageSize(params.chain);
@@ -93,6 +94,7 @@ async function fetchAddressTxPage(params: {
   endBlock: number;
   apiKey: string;
   serviceAccessPassword?: string;
+  serviceAccessSecret?: string;
   page: number;
 }): Promise<ExplorerTx[]> {
   const url = new URL(params.chain.explorerApiUrl, globalThis.location?.origin || "http://localhost");
@@ -110,9 +112,10 @@ async function fetchAddressTxPage(params: {
   url.searchParams.set("offset", String(pageSize));
   url.searchParams.set("apikey", params.apiKey);
 
-  const headers = params.serviceAccessPassword
-    ? serverAccessHeaders({ "x-okx-boost-access": params.serviceAccessPassword })
-    : serverAccessHeaders();
+  const serviceHeaders: Record<string, string> = {};
+  if (params.serviceAccessPassword) serviceHeaders["x-okx-boost-access"] = params.serviceAccessPassword;
+  if (params.serviceAccessSecret) serviceHeaders["x-okx-boost-internal"] = params.serviceAccessSecret;
+  const headers = serverAccessHeaders(serviceHeaders);
   const response = await fetch(url, { headers });
   const payload = (await response.json().catch(() => ({}))) as (ExplorerResponse & OkxXLayerResponse & { error?: string });
   if (!response.ok) {

@@ -7,6 +7,10 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 200;
 const MAX_RATE_LIMIT_RETRIES = 8;
 const RATE_LIMIT_BACKOFF_MS = 2_000;
+const REQUEST_TIMEOUT_MS = 3_000;
+const NO_NODES_CIRCUIT_MS = 10 * 60_000;
+
+const noNodesCircuit = new Map<string, number>();
 
 type AnkrTransaction = {
   blockNumber?: string;
@@ -41,6 +45,7 @@ export async function fetchAnkrAddressOkxHashes(params: {
   if (!params.chain.ankrBlockchain) {
     throw new Error(`Ankr Advanced API is not configured for ${params.chain.name}`);
   }
+  assertAnkrCircuitAvailable(params.chain.ankrBlockchain);
   const address = normalizeAddress(params.address);
   const routers = new Set(params.chain.okxRouters);
   const hashes = new Set<string>();
@@ -104,30 +109,56 @@ async function fetchAnkrPage(params: {
   if (params.pageToken) requestParams.pageToken = params.pageToken;
 
   for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt += 1) {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: serverAccessHeaders({
-        accept: "application/json",
-        "content-type": "application/json",
-      }),
-      body: JSON.stringify({
-        id: 1,
-        jsonrpc: "2.0",
-        method: METHOD,
-        params: requestParams,
-      }),
-    });
-    const payload = (await response.json().catch(() => ({}))) as AnkrTransactionsResponse;
+    const response = await fetchAnkrJson(url, {
+      id: 1,
+      jsonrpc: "2.0",
+      method: METHOD,
+      params: requestParams,
+    }, params.blockchain);
+    const payload = response.payload;
     if (response.ok && !payload.error) return payload;
 
     const message = payload.error?.message || `Ankr Advanced API HTTP ${response.status}`;
     if (!isRateLimitError(response.status, message) || attempt === MAX_RATE_LIMIT_RETRIES) {
+      if (isNoNodesError(message)) markAnkrNoNodes(params.blockchain);
       throw new Error(message);
     }
     await sleep(RATE_LIMIT_BACKOFF_MS * (attempt + 1));
   }
 
   throw new Error("Ankr Advanced API rate limit retry exhausted");
+}
+
+async function fetchAnkrJson(
+  url: string,
+  body: Record<string, unknown>,
+  blockchain: string,
+): Promise<{ ok: boolean; status: number; payload: AnkrTransactionsResponse }> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: serverAccessHeaders({
+        accept: "application/json",
+        "content-type": "application/json",
+      }),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const payload = (await response.json().catch(() => ({}))) as AnkrTransactionsResponse;
+    return { ok: response.ok, status: response.status, payload };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      markAnkrNoNodes(blockchain);
+      const timeoutError = new Error(`Ankr Advanced API timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      (timeoutError as Error & { cause: unknown }).cause = error;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 function ankrMethodUrl(rawUrl: string): string {
@@ -155,6 +186,24 @@ function parseBlockNumber(value: string | undefined): number | undefined {
 
 function isRateLimitError(status: number, message: string): boolean {
   return status === 429 || /rate limit|too many requests/i.test(message);
+}
+
+function assertAnkrCircuitAvailable(blockchain: string) {
+  const blockedUntil = noNodesCircuit.get(blockchain);
+  if (!blockedUntil) return;
+  if (blockedUntil <= Date.now()) {
+    noNodesCircuit.delete(blockchain);
+    return;
+  }
+  throw new Error(`No nodes available (cached for ${blockchain}; skipping Ankr retry)`);
+}
+
+function markAnkrNoNodes(blockchain: string) {
+  noNodesCircuit.set(blockchain, Date.now() + NO_NODES_CIRCUIT_MS);
+}
+
+function isNoNodesError(message: string): boolean {
+  return /no nodes available/i.test(message);
 }
 
 function sleep(ms: number): Promise<void> {

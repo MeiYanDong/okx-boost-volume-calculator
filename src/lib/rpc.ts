@@ -167,7 +167,19 @@ export class RpcClient {
   }
 
   async getBlock(blockNumber: number): Promise<RpcBlock> {
-    return this.request<RpcBlock>("eth_getBlockByNumber", [`0x${blockNumber.toString(16)}`, false]);
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= RPC_MAX_RETRIES; attempt += 1) {
+      const block = await this.request<RpcBlock | null | undefined>("eth_getBlockByNumber", [
+        `0x${blockNumber.toString(16)}`,
+        false,
+      ]);
+      if (isRpcBlock(block)) return block;
+
+      lastError = new RpcRequestError(`Block ${blockNumber} returned no timestamp`);
+      if (attempt >= RPC_MAX_RETRIES) throw lastError;
+      await sleep(rpcRetryBackoffMs(lastError, attempt));
+    }
+    throw lastError;
   }
 
   async getBlockTimestamp(blockNumber: number): Promise<number> {
@@ -263,6 +275,15 @@ function errorMessage(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function isRpcBlock(value: unknown): value is RpcBlock {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as Partial<RpcBlock>).timestamp === "string" &&
+    typeof (value as Partial<RpcBlock>).number === "string"
+  );
 }
 
 class RpcRequestError extends Error {

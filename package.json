@@ -3,15 +3,27 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "node server.mjs",
-    "build": "npm run lint && vite build && npm run build:server",
+    "build": "npm run typecheck && vite build && npm run build:server",
     "build:server": "vite build --config vite.server.config.ts",
     "preview": "NODE_ENV=production node server.mjs",
     "start": "NODE_ENV=production node server.mjs",
-    "lint": "npm run lint:app && npm run lint:node",
-    "lint:app": "tsc -p tsconfig.json --noEmit",
-    "lint:node": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.server.json --noEmit"
+    "test": "tsx --test server/*.test.mjs src/**/*.test.ts",
+    "typecheck": "npm run typecheck:app && npm run typecheck:node && npm run typecheck:test",
+    "typecheck:app": "tsc -p tsconfig.json --noEmit",
+    "typecheck:node": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "node scripts/check-format.mjs",
+    "format:baseline": "node scripts/check-format.mjs --update-baseline",
+    "audit:ci": "npm audit --audit-level=high",
+    "quality": "npm run format:check && npm run lint && npm test && npm run audit:ci && npm run build",
+    "smoke:production": "node scripts/smoke-production.mjs"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.0",
@@ -19,11 +31,20 @@
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "vite": "^5.4.19"
+    "vite": "^7.3.6"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.4.1",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "typescript": "^5.7.3"
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.5",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.69.0"
   }
 }

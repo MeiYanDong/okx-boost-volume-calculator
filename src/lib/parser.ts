@@ -1,11 +1,17 @@
 import { baseMultiplierFor, bonusMultiplierFor, boostRuleVersionForTimestamp, tradeUsdFromStableLeg } from "./boostRules";
 import { formatUnitsNumber, toUtcDate } from "./format";
-import { normalizeAddress, ZERO_NATIVE } from "./chains";
+import { isStableToken, normalizeAddress, ZERO_NATIVE } from "./chains";
 import { RpcClient, type RpcLog, type RpcReceipt, type RpcTransaction } from "./rpc";
 import type { ChainConfig, ParsedSwap, TokenMeta, TransferEvent } from "./types";
 
 const ERC20_TRANSFER_TOPIC =
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+type SwapInputLeg = {
+  token: TokenMeta;
+  value: bigint;
+  routeValue?: bigint;
+};
 
 export async function parseOkxSwap(params: {
   chain: ChainConfig;
@@ -40,8 +46,19 @@ export async function parseOkxSwap(params: {
   }
 
   const inputAmount = formatUnitsNumber(input.value, input.token.decimals);
+  const inputRouteAmount =
+    input.routeValue !== undefined ? formatUnitsNumber(input.routeValue, input.token.decimals) : inputAmount;
   const outputAmount = formatUnitsNumber(output.value, output.token.decimals);
   const feeAmount = inferFeeAmount(transfers, output.token, router, user);
+  const { wearUsd, wearBasis } = inferWearUsd({
+    chain: params.chain,
+    inputToken: input.token,
+    outputToken: output.token,
+    inputAmount,
+    inputRouteAmount,
+    outputAmount,
+    feeAmount,
+  });
   const { tradeUsd, usdBasis } = tradeUsdFromStableLeg({
     chain: params.chain,
     inputToken: input.token,
@@ -70,6 +87,8 @@ export async function parseOkxSwap(params: {
     inputAmount,
     outputAmount,
     feeAmount,
+    wearUsd,
+    wearBasis,
     tradeUsd,
     usdBasis,
     baseMultiplier,
@@ -110,10 +129,10 @@ async function inferInputLeg(
   transfers: TransferEvent[],
   tokenMeta: Map<string, TokenMeta>,
   user: string,
-): Promise<{ token: TokenMeta; value: bigint } | null> {
+): Promise<SwapInputLeg | null> {
   const nativeValue = BigInt(tx.value);
   if (nativeValue > 0n) {
-    return { token: chain.nativeToken, value: nativeValue };
+    return { token: chain.nativeToken, value: nativeValue, routeValue: nativeValue };
   }
 
   const outgoing = transfers.filter((event) => event.from === user && event.to !== user && event.value > 0n);
@@ -122,10 +141,12 @@ async function inferInputLeg(
   const outputToken = [...transfers].reverse().find((event) => event.to === user && event.from !== user)?.token;
   const transfer = await selectPrimaryInputTransfer(outgoing, transfers, tokenMeta, rpc, outputToken);
   const token = tokenMeta.get(transfer.token) || (await rpc.tokenMeta(transfer.token));
-  const totalValue = outgoing
-    .filter((event) => event.token === transfer.token)
+  const sameTokenOutgoing = outgoing.filter((event) => event.token === transfer.token);
+  const totalValue = sameTokenOutgoing.reduce((sum, event) => sum + event.value, 0n);
+  const routeValue = sameTokenOutgoing
+    .filter((event) => transferForwardsIntoRoute(transfers, event))
     .reduce((sum, event) => sum + event.value, 0n);
-  return { token, value: totalValue };
+  return { token, value: totalValue, routeValue: routeValue > 0n ? routeValue : transfer.value };
 }
 
 async function selectPrimaryInputTransfer(
@@ -139,9 +160,7 @@ async function selectPrimaryInputTransfer(
     outgoing.map(async (event) => {
       const token = tokenMeta.get(event.token) || (await rpc.tokenMeta(event.token));
       const amount = formatUnitsNumber(event.value, token.decimals);
-      const forwardsIntoRoute = transfers.some(
-        (candidate) => candidate.logIndex > event.logIndex && candidate.from === event.to,
-      );
+      const forwardsIntoRoute = transferForwardsIntoRoute(transfers, event);
       return {
         event,
         amount,
@@ -159,6 +178,10 @@ async function selectPrimaryInputTransfer(
   });
 
   return scored[0].event;
+}
+
+function transferForwardsIntoRoute(transfers: TransferEvent[], event: TransferEvent): boolean {
+  return transfers.some((candidate) => candidate.logIndex > event.logIndex && candidate.from === event.to);
 }
 
 async function inferOutputLeg(
@@ -192,7 +215,60 @@ function inferFeeAmount(
       event.value > 0n,
   );
   if (!feeTransfers.length) return undefined;
-  return feeTransfers.reduce((sum, event) => sum + formatUnitsNumber(event.value, outputToken.decimals), 0);
+  return roundUsdAmount(
+    feeTransfers.reduce((sum, event) => sum + formatUnitsNumber(event.value, outputToken.decimals), 0),
+  );
+}
+
+function inferWearUsd(params: {
+  chain: ChainConfig;
+  inputToken: TokenMeta;
+  outputToken: TokenMeta;
+  inputAmount: number;
+  inputRouteAmount: number;
+  outputAmount: number;
+  feeAmount?: number;
+}): { wearUsd?: number; wearBasis?: string } {
+  const inputIsStable = isStableToken(params.chain, params.inputToken.address);
+  const outputIsStable = isStableToken(params.chain, params.outputToken.address);
+
+  if (params.feeAmount !== undefined && outputIsStable) {
+    return {
+      wearUsd: params.feeAmount,
+      wearBasis: `${params.outputToken.symbol} 路由费用`,
+    };
+  }
+
+  if (inputIsStable) {
+    const wearUsd = roundUsdAmount(Math.max(0, params.inputAmount - params.inputRouteAmount));
+    if (wearUsd > 0 || !outputIsStable) {
+      return {
+        wearUsd,
+        wearBasis: `${params.inputToken.symbol} 输入费用`,
+      };
+    }
+  }
+
+  if (inputIsStable && outputIsStable) {
+    const wearUsd = roundUsdAmount(Math.max(0, params.inputAmount - params.outputAmount));
+    return {
+      wearUsd,
+      wearBasis: `${params.inputToken.symbol} 输入 - ${params.outputToken.symbol} 净输出`,
+    };
+  }
+
+  if (outputIsStable) {
+    return {
+      wearUsd: 0,
+      wearBasis: `${params.outputToken.symbol} 路由费用`,
+    };
+  }
+
+  return {};
+}
+
+function roundUsdAmount(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function fallbackSwap(
