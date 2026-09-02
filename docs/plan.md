@@ -4,11 +4,11 @@
 
 ## 当前阶段
 
-S48：归档窗口错位导致数据被隐藏修复已完成。
+S49：代码库质量基线与可复现发布正在实施。
 
-S48 修复 S47 引入的回归：旧快照窗口的 Supabase 归档不能被清空成“待刷新”。已有归档必须先恢复，再由首页、钱包列表和详情页按当前快照日重新统计展示。
+S49 将当前 X Layer 与飞书同步实现收敛到 GitHub 审查分支，补齐关键业务回归、自动质量门禁、发布 ADR 和暂停态运行时验证。生产 RPC 在本阶段继续保持暂停。
 
-子 plan：[S48 归档窗口错位数据隐藏修复](./plans/2026-05-31-archive-window-reuse-fix.md)
+子 plan：[S49 代码库质量基线](./plans/2026-09-02-repository-quality-baseline.md)
 
 ## 阶段索引
 
@@ -63,6 +63,7 @@ S48 修复 S47 引入的回归：旧快照窗口的 Supabase 归档不能被清�
 | S46 X Layer 增量链上兜底与旧归档误报修复 | 已完成 | [子 plan](./plans/2026-05-31-xlayer-incremental-rpc-fallback.md) | 索引失败时对小范围增量低速链扫，失败时不再把旧归档写成成功 |
 | S47 钱包详情每日数据窗口口径修复 | 已完成 | [子 plan](./plans/2026-05-31-wallet-detail-date-window.md) | 详情页每日数据、加成和交易明细按当前快照日窗口展示 |
 | S48 归档窗口错位数据隐藏修复 | 已完成 | [子 plan](./plans/2026-05-31-archive-window-reuse-fix.md) | 旧归档结果照常恢复，再按当前快照日重算展示 |
+| S49 代码库质量基线与可复现发布 | 进行中 | [子 plan](./plans/2026-09-02-repository-quality-baseline.md) | 关键回归、CI 门禁、GitHub source of truth 与运行时 smoke |
 
 ## 执行原则
 
