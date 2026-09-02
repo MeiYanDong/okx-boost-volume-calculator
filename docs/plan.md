@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-S49：代码库质量基线与可复现发布实施已完成，PR #1 等待人工合并。
+S49：代码库质量基线、PR 合并与可追溯生产发布已完成；RPC 继续保持暂停。
 
 S49 将当前 X Layer 与飞书同步实现收敛到 GitHub 审查分支，补齐关键业务回归、自动质量门禁、发布 ADR 和暂停态运行时验证。生产 RPC 在本阶段继续保持暂停。
 
@@ -63,7 +63,7 @@ S49 将当前 X Layer 与飞书同步实现收敛到 GitHub 审查分支，补�
 | S46 X Layer 增量链上兜底与旧归档误报修复 | 已完成 | [子 plan](./plans/2026-05-31-xlayer-incremental-rpc-fallback.md) | 索引失败时对小范围增量低速链扫，失败时不再把旧归档写成成功 |
 | S47 钱包详情每日数据窗口口径修复 | 已完成 | [子 plan](./plans/2026-05-31-wallet-detail-date-window.md) | 详情页每日数据、加成和交易明细按当前快照日窗口展示 |
 | S48 归档窗口错位数据隐藏修复 | 已完成 | [子 plan](./plans/2026-05-31-archive-window-reuse-fix.md) | 旧归档结果照常恢复，再按当前快照日重算展示 |
-| S49 代码库质量基线与可复现发布 | 已完成（待合并） | [子 plan](./plans/2026-09-02-repository-quality-baseline.md) | 关键回归、CI 门禁、GitHub source of truth 与运行时 smoke |
+| S49 代码库质量基线与可复现发布 | 已完成 | [子 plan](./plans/2026-09-02-repository-quality-baseline.md) | 关键回归、CI 门禁、GitHub source of truth 与运行时 smoke |
 
 ## 执行原则
 

@@ -19,7 +19,7 @@
 | 我的角色 | 产品设计、链上数据建模、全栈开发、自动化设计 |
 | 协作方式 | 独立负责规则与验收，与 AI 协作完成设计和实现 |
 | 当前活动链 | 生产配置默认只刷新 X Layer；保留 BNB Chain 支持和历史归档 |
-| 当前验证 | 2026-09-02 `npm run quality`、`13/13` 测试与生产暂停态 smoke 通过；PR #1 待合并 |
+| 当前验证 | 2026-09-02 PR #1 已合并并自动发布；`13/13` 测试、主分支 CI 与生产暂停态 smoke 通过 |
 
 ## 为什么不是一个单钱包计算器
 
@@ -165,9 +165,9 @@ flowchart LR
 | 已实现多钱包、滚动窗口、多链解析与增量归档 | 当前源码、阶段文档与 Git 历史 | 代码记录 | 不等于当前生产服务健康 |
 | 2026-05-13 的 8 钱包全局刷新修复验收通过 | 指定日期的真实刷新记录 | 历史真实运行 | 仅证明当时 8 钱包和对应环境 |
 | 当前回归测试 `13/13` 通过 | `npm test`，2026-09-02 | 本地与 GitHub Actions | 覆盖关键边界，不代表全仓覆盖率达到 80% |
-| 当前代码支持 X Layer 默认链、RPC 暂停与管理员限制 | 配置解析、代理访问控制与测试；生产暂停态 smoke | 当前分支 / 运行时回读 | 仅确认暂停开关，不代表扫描已恢复 |
-| 当前代码支持归档同步飞书多维表格 | 同步模块、API、6 项映射/隔离测试和 2 项写入顺序测试 | 当前分支 / 本地与 CI | 未取得本轮生产写入回执 |
-| 合并前质量门禁已生效 | GitHub Actions `Quality / quality` 与 `main` 分支保护 | GitHub readback | PR #1 尚未合并，生产未部署此提交 |
+| 当前代码支持 X Layer 默认链、RPC 暂停与管理员限制 | 配置解析、代理访问控制与测试；生产暂停态 smoke | GitHub `main` / 运行时回读 | 仅确认暂停开关，不代表扫描已恢复 |
+| 当前代码支持归档同步飞书多维表格 | 同步模块、API、6 项映射/隔离测试和 2 项写入顺序测试 | GitHub `main` / 本地与 CI | 未取得本轮生产写入回执 |
+| 合并与发布门禁已生效 | PR #1、主分支 Quality、Vercel deployment 与稳定域名 readback | GitHub / Vercel / 运行时 | 生产仍暂停，未执行真实扫描或飞书写入 |
 
 当前版本还有明确边界：
 
@@ -212,6 +212,7 @@ npm run build
 - [阶段 Todo](docs/todo.md)
 - [Repository and release source of truth ADR](docs/adr/0001-repository-and-release-source-of-truth.md)
 - [S49 代码库质量基线](docs/plans/2026-09-02-repository-quality-baseline.md)
+- [S49 合并与生产发布证据](docs/evidence/2026-09-02-repository-quality-release.md)
 - [Vercel 私人部署说明](docs/vercel-private-deploy.md)
 - [全局刷新一致性修复](docs/plans/2026-05-13-global-refresh-consistency.md)
 - [交易明细完整性加固](docs/plans/2026-05-13-transaction-detail-completeness.md)

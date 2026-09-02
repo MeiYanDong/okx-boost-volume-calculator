@@ -14,3 +14,5 @@
 - [x] Verify `Quality / quality` on GitHub.
 - [x] Configure `quality` as a strict required check on `main`.
 - [x] Confirm production remains in RPC-paused mode.
+- [x] Rebase-merge PR #1 and verify the `main` Quality run.
+- [x] Verify the Vercel Production deployment, Git commit, aliases, and post-deploy smoke.

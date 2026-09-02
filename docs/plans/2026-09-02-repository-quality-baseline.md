@@ -42,8 +42,8 @@ Acceptance criteria:
 ## Non-Goals
 
 - No broad refactor of `App.tsx`, Supabase storage, or Feishu synchronization.
-- No automatic merge to `main`.
-- No production deployment or RPC unpause during this stage.
+- No merge to `main` before explicit user continuation; merge was performed only after that authorization.
+- No RPC unpause, real wallet scan, or Feishu production write during this stage.
 - No change to `docs/requirements.md` without user authorization.
 
 ## Status
@@ -54,11 +54,14 @@ Acceptance criteria:
 - [x] ADR and production smoke command added.
 - [x] Pull request CI is green.
 - [x] Required branch check is enabled or its permission blocker is recorded.
+- [x] PR is merged and the matching GitHub `main` commit is deployed to Vercel Production.
 
 ## Evidence
 
-- Review: [PR #1](https://github.com/MeiYanDong/okx-boost-volume-calculator/pull/1), left open for manual merge.
-- CI: [Quality run 33594264391](https://github.com/MeiYanDong/okx-boost-volume-calculator/actions/runs/33594264391), `quality` passed in 28 seconds.
+- Review: [PR #1](https://github.com/MeiYanDong/okx-boost-volume-calculator/pull/1) was rebase-merged into `main` as `4ab56f9d53e3ad9fb3842554cd7700e614e97d88`.
+- CI: [main Quality run 33595551744](https://github.com/MeiYanDong/okx-boost-volume-calculator/actions/runs/33595551744) passed for `4ab56f9`.
 - Branch policy: `main` requires a strict, current `quality` check and pull request; force pushes and deletion are disabled, including for administrators.
 - Local: `npm run quality` passed with 13/13 tests and zero npm audit vulnerabilities.
-- Runtime: `npm run smoke:production -- --expect-paused` returned homepage 200, Cron paused, and RPC 503.
+- Release: Vercel deployment `dpl_3mXKdXGkpVHmqUsvyRN4VC2ZqUCA` cloned `main` commit `4ab56f9`, reached Ready, and received the stable production alias.
+- Runtime: post-deploy `npm run smoke:production -- --expect-paused` returned homepage 200, Cron paused, and RPC 503.
+- Detailed receipt: [S49 merge and production release evidence](../evidence/2026-09-02-repository-quality-release.md).

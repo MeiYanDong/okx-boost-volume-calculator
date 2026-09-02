@@ -1,9 +1,9 @@
 {
   "version": 1,
   "files": {
-    "README.md": "db01ea3af0f0677403468d2e87a8cdfe2186e4ba441206ab0ea6cccece47b677",
-    "docs/plan.md": "f2d53d5f263c2bb1493c668aca8a752ee8a94bb1033c2a44769af089981cd578",
-    "docs/todo.md": "16277f98a1b34043e183383022c34535f6ec5e09d0c1b5711b47ded883833959",
+    "README.md": "9eaee8b1d0f951dbc4c20cedaa4bcd909a156a32f4eaed4b8293d67c10d56c35",
+    "docs/plan.md": "ec4388e8e08ac43ac96c30613c8510f06dfc18b05fd24a00b1c4fb9e5c67b138",
+    "docs/todo.md": "256a3c2fddf2bdf5e5533f6042f4637072580c192b438e325067eeeeed319cab",
     "docs/vercel-private-deploy.md": "732c3bdc30bdd18100d5089ba87d6483f4991f668252f2429aba215e52dae7ef",
     "server.mjs": "3a3995f85c4a7342b936cac2ee6fc519e0e3169a418f336487d378f5d5556720",
     "server/archiveApi.mjs": "5003499af9fbf9e25b5094aee0f12097ef19915aab1f9ae9d319767d7ead2745",
