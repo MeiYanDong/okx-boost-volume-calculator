@@ -101,7 +101,7 @@
   子 todo：[S47 钱包详情每日数据窗口口径修复](./todos/2026-05-31-wallet-detail-date-window.md)
 - [x] S48 修复旧归档被隐藏成待重扫
   子 todo：[S48 归档窗口错位数据隐藏修复](./todos/2026-05-31-archive-window-reuse-fix.md)
-- [ ] S49 建立代码库质量基线与可复现发布门禁
+- [x] S49 建立代码库质量基线与可复现发布门禁（PR #1 待人工合并）
   子 todo：[S49 代码库质量基线](./todos/2026-09-02-repository-quality-baseline.md)
 
 ## 维护规则
