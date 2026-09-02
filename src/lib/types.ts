@@ -73,6 +73,8 @@ export type ParsedSwap = {
   inputAmount: number;
   outputAmount: number;
   feeAmount?: number;
+  wearUsd?: number;
+  wearBasis?: string;
   tradeUsd?: number;
   usdBasis: string;
   baseMultiplier: number;
@@ -90,6 +92,7 @@ export type DailyBoostRow = {
 };
 
 export type CalculationResult = {
+  activeChainIds?: ChainId[];
   windowStart: string;
   windowEnd: string;
   averageBoostVolume: number;
@@ -122,6 +125,7 @@ export type CalculateInput = {
   chain: ChainConfig;
   apiKey?: string;
   serviceAccessPassword?: string;
+  serviceAccessSecret?: string;
   rpcUrl?: string;
   ankrMultichainRpcUrl?: string;
   walletTransactions?: WalletTransaction[];

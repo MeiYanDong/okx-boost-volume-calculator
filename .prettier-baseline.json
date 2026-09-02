@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "files": {
+    "README.md": "d965a633f540307b3d690c079231f6660f317457c19cd39f39c5a12e374a1e41",
+    "docs/plan.md": "96073e11d6027f1fa6c812ddec7cff3bbd547f4d2be1fb8b4115692f71004303",
+    "docs/todo.md": "a4897cce80a6ba260610f80188c971543b749920c53f52038a54743a2b8db32a",
+    "docs/vercel-private-deploy.md": "732c3bdc30bdd18100d5089ba87d6483f4991f668252f2429aba215e52dae7ef",
+    "server.mjs": "3a3995f85c4a7342b936cac2ee6fc519e0e3169a418f336487d378f5d5556720",
+    "server/archiveApi.mjs": "5003499af9fbf9e25b5094aee0f12097ef19915aab1f9ae9d319767d7ead2745",
+    "server/authApi.mjs": "9096049fe2de6e8199c886246acb18f3397ed1c9c80086a23c15e0badbacfbba",
+    "server/cronApi.mjs": "88b159d5e99e2d2da4dccf9edebda55d5decddefe5e24ea942dc169dd2544224",
+    "server/cronJob.ts": "6a1445f655042e6e5f333cac82e6b62ecfd23e496280389304fe6d1b80dc6ec0",
+    "server/proxy.mjs": "8cca4decef1daee237d1b3270fddcb8a8dab18603b88532a9ec014d71d4f4dc7",
+    "server/supabaseStore.mjs": "18f1f4f442d62b4c67c89d35efa0ffad26482412baf154c8f89adf38e7150785",
+    "src/App.tsx": "550910374915592d4a8c6449205beea51fec647e9f1d242388809dbf460a5276",
+    "src/lib/ankr.ts": "28cca46de90b8f9d675676ae9433becb044da2a716e44987346ddc1d15dd53c3",
+    "src/lib/auth.ts": "5a3784b266947ef50a1cf46ea7ed8098f06ac5f9428ab6a4f6f7e2571815413b",
+    "src/lib/boostRules.ts": "87c7beb33c31fafa0c192763b03cc4f62ca65fa09d742fe841862f308f162088",
+    "src/lib/calculator.ts": "e9406c8d7465d35575377c3588dbf0c2a2eb2d244cfff900599e456afde6e489",
+    "src/lib/chains.ts": "f2ad299e9b95b1d1f14f7c2fdc2e09082d27f872e56d1e63844525472bf5f2ad",
+    "src/lib/explorer.ts": "9d37115aca7d61ff3f245fa8af3dc8641be52fb3f3d4b3c5733bc5223096c7ec",
+    "src/lib/format.ts": "f4869d44c4b9071e10253e0144c046f601b6a386ffec3d692676afc30b6a4462",
+    "src/lib/parser.ts": "46f0e3c3fac8db057ecbd2c79213d73af0d5fa9237e17aa741a06ed091fda813",
+    "src/lib/reprice.ts": "4973794a50ea089ff8bf2c03b7200de98186a4e74c41ae5c451bfdeaf7044fb2",
+    "src/lib/rpc.ts": "5cfd92b99f1b0cb494058cd786944c7aa4a53ae45129540d3adc5507494b1f4e",
+    "src/lib/rpcScan.ts": "98de86eb979ebf3f41b8d62b7d14618645be7d09b9a8c86f5adc52b3506030e0",
+    "src/styles.css": "e3557db6ec2b193c9527748ccb50610484c6fa012a9567f5d9a107532bd7d27b",
+    "src/vite-env.d.ts": "bf144e3cdae616e27b064c8c2b94b14525e220fb3facc4cb4884d21b65eb5aa5"
+  }
+}

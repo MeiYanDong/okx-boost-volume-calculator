@@ -132,6 +132,11 @@ export async function handleAuthApi(request, response, config, env = process.env
 
   if (action === "consume-usage") {
     const auth = await validateUserAccess(request, env);
+    if (config.adminOnlyUsage && auth.profile.role !== "admin") {
+      const error = new Error("当前项目仅管理员账号可使用扫描、刷新和上游索引功能。");
+      error.statusCode = 403;
+      throw error;
+    }
     const usage = await consumeUserUsage(env, auth.user, body);
     sendJson(response, 200, { ok: true, usage }, { "cache-control": "no-store" });
     return;
@@ -171,15 +176,11 @@ async function validateAdminAccess(request, config, env, options = {}) {
   if (adminAuth) return { mode: "admin-session", userId: adminAuth.user.id, bootstrap: false };
 
   const hasAdmin = await hasActiveAdminProfile(env);
-  try {
-    validateAccess(request, config, env);
-    if (!hasAdmin) return { mode: "bootstrap-access", userId: "", bootstrap: true };
-    const error = new Error("请先登录管理员账号。私有访问码只用于首个管理员初始化。");
-    error.statusCode = 403;
-    throw error;
-  } catch (error) {
-    throw error;
-  }
+  validateAccess(request, config, env);
+  if (!hasAdmin) return { mode: "bootstrap-access", userId: "", bootstrap: true };
+  const error = new Error("请先登录管理员账号。私有访问码只用于首个管理员初始化。");
+  error.statusCode = 403;
+  throw error;
 }
 
 function headerValue(headers, name) {

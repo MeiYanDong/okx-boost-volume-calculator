@@ -1,0 +1,6 @@
+dist/
+.server/
+node_modules/
+tmp/
+.vercel/
+package-lock.json

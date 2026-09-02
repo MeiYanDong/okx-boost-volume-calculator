@@ -5,7 +5,15 @@ import {
   normalizeWorkspaceId,
   setServerArchive,
 } from "./archiveStore.mjs";
-import { isProductionRuntime, requestUrl, sendFeishuText, sendJson, validateAccess } from "./proxy.mjs";
+import { syncFeishuBaseFromArchive } from "./feishuBaseSync.mjs";
+import {
+  ensureRpcUsageAllowed,
+  isProductionRuntime,
+  requestUrl,
+  sendFeishuText,
+  sendJson,
+  validateAccess,
+} from "./proxy.mjs";
 import {
   getSupabaseWorkspaceNotificationTarget,
   getSupabaseWorkspaceArchive,
@@ -22,6 +30,22 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
     return;
   }
 
+  if (config.rpcUsagePaused) {
+    sendJson(
+      response,
+      200,
+      {
+        ok: true,
+        paused: true,
+        reason: "rpc_usage_paused",
+        message: "项目 RPC 使用已暂停，自动刷新不会请求 RPC、Ankr 或 Explorer 上游。",
+      },
+      { "cache-control": "no-store" },
+    );
+    return;
+  }
+
+  ensureRpcUsageAllowed(config);
   validateCronAccess(request, config, env);
   const upstashConfigured = isArchiveStoreConfigured(env);
   const supabaseConfigured = isSupabaseConfigured(env);
@@ -37,7 +61,11 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
   };
   const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
   const requestedWorkspace = url.searchParams.get("workspace") || headerValue(request.headers, "x-okx-boost-workspace");
-  const workspaces = await resolveCronWorkspaces(env, requestedWorkspace, { upstashConfigured, supabaseConfigured });
+  const workspaces = await resolveCronWorkspaces(env, requestedWorkspace, {
+    upstashConfigured,
+    supabaseConfigured,
+    adminOnlyUsage: config.adminOnlyUsage,
+  });
   const { runDailyRefresh } = await loadCronJob();
   const results = [];
 
@@ -52,14 +80,12 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
         },
       });
 
-      const operationErrors = [];
-      if (!dryRun) {
-        try {
-          await saveCronWorkspaceArchive(env, workspace, result.updatedArchive);
-        } catch (error) {
-          operationErrors.push(`归档保存失败：${errorMessage(error)}`);
-        }
-      }
+      const { operationErrors, feishuSync } = await persistArchiveAndSyncFeishu({
+        env,
+        workspace,
+        result,
+        dryRun,
+      });
 
       const notificationTarget = await resolveNotificationTarget(env, workspace);
       const shouldNotify = shouldNotifyForTarget(result, notificationTarget) || operationErrors.length > 0;
@@ -88,6 +114,7 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
         notified,
         notificationProvider,
         shouldNotify,
+        feishuSync,
         error: operationErrors.join("\n"),
         notifyError,
         notificationText,
@@ -154,6 +181,8 @@ export async function handleDailyRefreshCron(request, response, config, env = pr
         notified: item.notified,
         notificationProvider: item.notificationProvider || undefined,
         shouldNotify: item.shouldNotify,
+        feishuSync: item.feishuSync || undefined,
+        failures: item.result?.failures || undefined,
         error: item.error || undefined,
         notifyError: item.notifyError || undefined,
         summary: resultSummary(item),
@@ -191,16 +220,23 @@ async function resolveCronWorkspaces(env, requestedWorkspace, config) {
   const requested = requestedWorkspace ? String(requestedWorkspace).trim() : "";
 
   if (config.supabaseConfigured) {
-    const ids = requested ? [requested] : await listSupabaseWorkspaceIds(env);
+    const ids = requested ? [requested] : await listSupabaseWorkspaceIds(env, { adminOnly: config.adminOnlyUsage });
     for (const workspaceId of ids) {
-      const resolved = await getSupabaseWorkspaceArchive(env, workspaceId).catch(() => null);
-      if (resolved) targets.push({ provider: "supabase", workspaceId: resolved.workspaceId, archive: resolved.archive });
+      const resolved = await getSupabaseWorkspaceArchive(env, workspaceId, { adminOnly: config.adminOnlyUsage }).catch(() => null);
+      if (resolved) {
+        targets.push({
+          provider: "supabase",
+          workspaceId: resolved.workspaceId,
+          ownerEmail: resolved.ownerEmail,
+          archive: resolved.archive,
+        });
+      }
     }
   }
 
   if (requested && targets.length) return targets;
 
-  if (config.upstashConfigured) {
+  if (!config.adminOnlyUsage && config.upstashConfigured) {
     const ids = requested ? [normalizeWorkspaceId(requested)] : await listArchiveWorkspaces(env);
     for (const workspaceId of ids) {
       const archive = await getServerArchive(env, workspaceId);
@@ -217,6 +253,53 @@ async function saveCronWorkspaceArchive(env, workspace, archive) {
     return;
   }
   await setServerArchive(archive, env, workspace.workspaceId);
+}
+
+async function persistArchiveAndSyncFeishu({
+  env,
+  workspace,
+  result,
+  dryRun,
+  saveArchive = saveCronWorkspaceArchive,
+  syncFeishu = syncFeishuBaseFromArchive,
+}) {
+  const operationErrors = [];
+  let archiveSaved = dryRun;
+  if (!dryRun) {
+    try {
+      await saveArchive(env, workspace, result.updatedArchive);
+      archiveSaved = true;
+    } catch (error) {
+      operationErrors.push(`归档保存失败：${errorMessage(error)}`);
+    }
+  }
+
+  if (!archiveSaved) {
+    return {
+      operationErrors,
+      archiveSaved,
+      feishuSync: { ok: true, skipped: true, reason: "archive_save_failed" },
+    };
+  }
+
+  let feishuSync;
+  try {
+    feishuSync = await syncFeishu(env, {
+      workspaceId: workspace.workspaceId,
+      ownerEmail: workspace.ownerEmail || "",
+      archive: result.updatedArchive,
+      dryRun,
+      trigger: "daily-refresh",
+    });
+    if (feishuSync?.ok === false) {
+      operationErrors.push(`飞书多维表格同步失败：${feishuSync.error || "未知错误"}`);
+    }
+  } catch (error) {
+    feishuSync = { ok: false, error: errorMessage(error) };
+    operationErrors.push(`飞书多维表格同步失败：${errorMessage(error)}`);
+  }
+
+  return { operationErrors, archiveSaved, feishuSync };
 }
 
 async function resolveNotificationTarget(env, workspace) {
@@ -286,3 +369,7 @@ function publicOriginFromRequest(request, url, env) {
   const protocol = forwardedProto || (env.VERCEL || env.VERCEL_ENV ? "https" : url.protocol.replace(":", "") || "http");
   return `${protocol}://${host}`.replace(/\/+$/, "");
 }
+
+export const cronApiTestHelpers = {
+  persistArchiveAndSyncFeishu,
+};

@@ -18,6 +18,8 @@ import {
 import { handleArchiveApi } from "./server/archiveApi.mjs";
 import { handleAuthApi } from "./server/authApi.mjs";
 import { handleDailyRefreshCron } from "./server/cronApi.mjs";
+import { handleFeishuBaseSyncApi } from "./server/feishuBaseSync.mjs";
+import { handleFeishuOAuthCallbackApi, handleFeishuOAuthStartApi } from "./server/feishuOAuthApi.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const mode = process.env.NODE_ENV === "production" ? "production" : "development";
@@ -67,6 +69,21 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/feishu") {
       await handleFeishuNotify(request, response, config, env);
+      return;
+    }
+
+    if (url.pathname === "/api/feishu-sync") {
+      await handleFeishuBaseSyncApi(request, response, config, env);
+      return;
+    }
+
+    if (url.pathname === "/api/feishu-oauth-start") {
+      await handleFeishuOAuthStartApi(request, response, config, env);
+      return;
+    }
+
+    if (url.pathname === "/api/feishu-oauth-callback") {
+      await handleFeishuOAuthCallbackApi(request, response, env);
       return;
     }
 
@@ -140,6 +157,31 @@ function pickLocalFallbackEnv(source) {
     "PUBLIC_APP_ORIGIN",
     "APP_ORIGIN",
     "CRON_SECRET",
+    "ACTIVE_CHAINS",
+    "VITE_ACTIVE_CHAINS",
+    "RPC_USAGE_PAUSED",
+    "OKX_BOOST_RPC_PAUSED",
+    "ADMIN_ONLY_USAGE",
+    "OKX_BOOST_ADMIN_ONLY",
+    "FEISHU_WEBHOOK_URL",
+    "FEISHU_WEBHOOK_SECRET",
+    "FEISHU_APP_ID",
+    "FEISHU_APP_SECRET",
+    "FEISHU_BASE_TOKEN",
+    "FEISHU_BASE_TABLE_ID",
+    "FEISHU_BASE_SYNC_ENABLED",
+    "FEISHU_BASE_SYNC_DISABLED",
+    "FEISHU_BASE_SYNC_WORKSPACE_ID",
+    "FEISHU_BASE_SYNC_OWNER_EMAIL",
+    "FEISHU_BASE_SYNC_START_DATE",
+    "FEISHU_BASE_SYNC_DRY_RUN",
+    "FEISHU_BASE_DEFAULT_BOOST_MULTIPLIER",
+    "FEISHU_BASE_DEFAULT_BONUS_RATE",
+    "FEISHU_BASE_DEFAULT_SERVICE_FEE_RATE",
+    "LARK_APP_ID",
+    "LARK_APP_SECRET",
+    "LARK_BASE_TOKEN",
+    "LARK_BASE_TABLE_ID",
     "KV_REST_API_URL",
     "KV_REST_API_TOKEN",
     "KV_REST_API_READ_ONLY_TOKEN",

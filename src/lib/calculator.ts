@@ -32,11 +32,14 @@ export type MultiChainCalculateInput = Omit<CalculateInput, "chain" | "previousR
   previousResult?: CalculationResult;
 };
 
+type SuccessfulChainResult = { chain: ChainConfig; result: CalculationResult };
+type FailedChainResult = { chain: ChainConfig; error: string };
+
 export async function calculateBoostVolumeAcrossChains(input: MultiChainCalculateInput): Promise<CalculationResult> {
   const chains = input.chains.length ? input.chains : [];
   if (!chains.length) throw new Error("No chain configured");
 
-  const settled: Array<{ chain: ChainConfig; result: CalculationResult } | { chain: ChainConfig; error: string }> = [];
+  const settled: Array<SuccessfulChainResult | FailedChainResult> = [];
   for (const chain of chains) {
     try {
       settled.push({
@@ -56,8 +59,8 @@ export async function calculateBoostVolumeAcrossChains(input: MultiChainCalculat
     }
   }
 
-  const successful = settled.filter((item): item is { chain: ChainConfig; result: CalculationResult } => "result" in item);
-  const failed = settled.filter((item): item is { chain: ChainConfig; error: string } => "error" in item);
+  const successful = settled.filter((item): item is SuccessfulChainResult => "result" in item);
+  const failed = settled.filter((item): item is FailedChainResult => "error" in item);
   if (!successful.length) {
     throw new Error(failed.map((item) => `${item.chain.name}: ${item.error}`).join("\n") || "No chain scan succeeded");
   }
@@ -65,7 +68,22 @@ export async function calculateBoostVolumeAcrossChains(input: MultiChainCalculat
     throw new Error(`部分链扫描失败，已保留原归档，未写入半成品结果：${failed.map((item) => `${item.chain.name}: ${item.error}`).join("\n")}`);
   }
 
+  return mergeMultiChainResults(input, successful, failed);
+}
+
+function mergeMultiChainResults(
+  input: Pick<MultiChainCalculateInput, "chains" | "endDate" | "previousResult">,
+  successful: SuccessfulChainResult[],
+  failed: FailedChainResult[],
+): CalculationResult {
+  const chains = input.chains;
   const { days } = buildUtcWindow(input.endDate);
+  const daySet = new Set(days);
+  const activeChainIds = new Set(chains.map((chain) => chain.id));
+  const archivedInactiveSwaps = (input.previousResult?.swaps || []).filter((swap) => {
+    const chainId = swap.chainId || "bsc";
+    return !activeChainIds.has(chainId) && daySet.has(swap.utcDate);
+  });
   const dailyRows = days.map<DailyBoostRow>((date) => ({
     date,
     txCount: 0,
@@ -73,7 +91,7 @@ export async function calculateBoostVolumeAcrossChains(input: MultiChainCalculat
     tradeUsd: 0,
   }));
   const dailyMap = new Map(dailyRows.map((row) => [row.date, row]));
-  const swaps = successful.flatMap((item) => item.result.swaps);
+  const swaps = dedupeSwaps([...successful.flatMap((item) => item.result.swaps), ...archivedInactiveSwaps]);
   for (const swap of swaps) {
     const row = dailyMap.get(swap.utcDate);
     if (!row) continue;
@@ -94,25 +112,39 @@ export async function calculateBoostVolumeAcrossChains(input: MultiChainCalculat
       txHashes: result.txHashes,
     };
   }
+  for (const [chainId, scan] of Object.entries(input.previousResult?.chainScans || {})) {
+    if (!activeChainIds.has(chainId as ChainId) && scan) {
+      chainScans[chainId as ChainId] = {
+        ...scan,
+        txHashes: archivedInactiveSwaps
+          .filter((swap) => (swap.chainId || "bsc") === chainId)
+          .map((swap) => swap.hash),
+      };
+    }
+  }
 
   const totalBoostVolume = dailyRows.reduce((sum, row) => sum + row.boostVolume, 0);
   const totalTradeUsd = dailyRows.reduce((sum, row) => sum + row.tradeUsd, 0);
-  const primaryScan = chainScans.bsc || Object.values(chainScans)[0];
+  const primaryScan = chainScans[chains[0].id] || Object.values(chainScans)[0];
   const incrementalCounts = Object.values(chainScans)
     .map((scan) => scan?.incrementalNewTxCount)
     .filter((value): value is number => typeof value === "number");
 
   return {
+    activeChainIds: chains.map((chain) => chain.id),
     windowStart: days[0],
     windowEnd: days[days.length - 1],
     averageBoostVolume: totalBoostVolume / 10,
     totalBoostVolume,
     totalTradeUsd,
     dailyRows: [...dailyRows].reverse(),
-    swaps: dedupeSwaps(swaps).sort((a, b) => b.timestamp - a.timestamp),
+    swaps: swaps.sort((a, b) => b.timestamp - a.timestamp),
     warnings: [
       ...successful.flatMap((item) => item.result.warnings),
       ...failed.map((item) => `${item.chain.name} 扫描失败：${item.error}`),
+      ...(archivedInactiveSwaps.length
+        ? [`未启用链沿用当前窗口归档交易 ${archivedInactiveSwaps.length} 笔，本次未请求对应 RPC。`]
+        : []),
     ],
     txHashes: successful.flatMap((item) => item.result.txHashes.map((hash) => `${item.chain.id}:${hash}`)),
     scannedFromBlock: primaryScan?.scannedFromBlock,
@@ -168,12 +200,15 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
     !input.forceRefresh &&
     !input.walletTransactions?.length &&
     hasCompatiblePrevious;
+  const needsFullIndexRefresh = canIncrementalRefresh && shouldRefreshFullIndex(input, previousResult);
   const reorgSafetyBlocks = input.reorgSafetyBlocks ?? DEFAULT_REORG_SAFETY_BLOCKS;
-  const scanStartBlock = canIncrementalRefresh
-    ? Math.min(endBlock, Math.max(startBlock, previousScannedToBlock! - reorgSafetyBlocks))
-    : startBlock;
+  const scanStartBlock = needsFullIndexRefresh
+    ? startBlock
+    : canIncrementalRefresh
+      ? Math.min(endBlock, Math.max(startBlock, previousScannedToBlock! - reorgSafetyBlocks))
+      : startBlock;
 
-  if (canIncrementalRefresh && endBlock <= previousScannedToBlock!) {
+  if (canIncrementalRefresh && !needsFullIndexRefresh && endBlock <= previousScannedToBlock!) {
     if (hasSameWindow) {
       input.onProgress?.(`归档已覆盖最新区块 ${endBlock}，无需读取链上交易`);
       return {
@@ -190,9 +225,9 @@ export async function calculateBoostVolume(input: CalculateInput): Promise<Calcu
   }
 
   const txHashesKey = txHashesCacheKey({ chain: input.chain, address, startBlock: scanStartBlock, endBlock });
-  const canUseTxHashesCache = !input.forceRefresh && !input.walletTransactions?.length;
+  const canUseTxHashesCache = !needsFullIndexRefresh && !input.forceRefresh && !input.walletTransactions?.length;
   const cachedTxHashes = canUseTxHashesCache ? readTxHashesCache(txHashesKey) : null;
-  const archiveAlreadyCoversWindow = canIncrementalRefresh && endBlock <= previousScannedToBlock!;
+  const archiveAlreadyCoversWindow = canIncrementalRefresh && !needsFullIndexRefresh && endBlock <= previousScannedToBlock!;
   let discovery: { hashes: string[]; source: TxDiscoverySource };
   try {
     discovery = archiveAlreadyCoversWindow
@@ -361,6 +396,12 @@ function canReusePreviousChainArchive(
   return hasChainScan || hasChainSwaps;
 }
 
+function shouldRefreshFullIndex(input: CalculateInput, previousResult: CalculationResult | undefined): boolean {
+  if (input.chain.explorerApiStyle !== "okx-xlayer") return false;
+  const previousSource = previousResult?.chainScans?.[input.chain.id]?.txDiscoverySource ?? previousResult?.txDiscoverySource;
+  return previousSource === "ankr";
+}
+
 function reusePreviousChainArchive(params: {
   chain: ChainConfig;
   previousResult: CalculationResult;
@@ -491,6 +532,17 @@ async function discoverOkxHashes(params: {
     return { hashes, source: "import" };
   }
 
+  if (prefersExplorerIndex(params.input.chain)) {
+    const explorerDiscovery = await discoverByExplorerIndex(params).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      indexErrors.push(`Explorer: ${message}`);
+      params.warnings.push(`Explorer 钱包索引读取失败，已尝试下一个来源：${message}`);
+      params.input.onProgress?.("Explorer 钱包索引不可用，改用 Ankr 钱包索引...");
+      return null;
+    });
+    if (explorerDiscovery) return explorerDiscovery;
+  }
+
   if (params.input.ankrMultichainRpcUrl && params.input.chain.ankrBlockchain) {
     try {
       params.input.onProgress?.(
@@ -521,27 +573,15 @@ async function discoverOkxHashes(params: {
   const canUseExplorerIndex =
     Boolean(params.input.chain.explorerApiUrl) &&
     (Boolean(params.input.apiKey) || params.input.chain.explorerApiStyle === "okx-xlayer");
-  if (canUseExplorerIndex) {
-    try {
-      params.input.onProgress?.(
-        `通过 Explorer 钱包交易索引筛选 OKX Router 交易，区块 ${params.startBlock}-${params.endBlock}...`,
-      );
-      const hashes = await fetchAddressOkxHashes({
-        chain: params.input.chain,
-        address: params.address,
-        startBlock: params.startBlock,
-        endBlock: params.endBlock,
-        apiKey: params.input.apiKey || "__server__",
-        serviceAccessPassword: params.input.serviceAccessPassword,
-      });
-      params.input.onProgress?.(`Explorer 钱包索引完成：${hashes.length} 个候选 OKX hash`);
-      return { hashes, source: "explorer" };
-    } catch (error) {
+  if (canUseExplorerIndex && !prefersExplorerIndex(params.input.chain)) {
+    const explorerDiscovery = await discoverByExplorerIndex(params).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       indexErrors.push(`Explorer: ${message}`);
       params.warnings.push(`Explorer 钱包索引读取失败，已尝试 RPC 兜底：${message}`);
       params.input.onProgress?.("Explorer 钱包索引不可用，最后兜底使用 RPC Transfer 事件...");
-    }
+      return null;
+    });
+    if (explorerDiscovery) return explorerDiscovery;
   }
 
   const rpcFallbackStatus = rpcFallbackStatusFor(params.input, params.startBlock, params.endBlock);
@@ -565,8 +605,42 @@ async function discoverOkxHashes(params: {
     return { hashes, source: "rpc" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`RPC 公开链上记录读取失败：${message}`);
+    const discoveryError = new Error(`RPC 公开链上记录读取失败：${message}`);
+    (discoveryError as Error & { cause: unknown }).cause = error;
+    throw discoveryError;
   }
+}
+
+async function discoverByExplorerIndex(params: {
+  input: CalculateInput;
+  address: string;
+  startBlock: number;
+  endBlock: number;
+}): Promise<{ hashes: string[]; source: TxDiscoverySource }> {
+  const canUseExplorerIndex =
+    Boolean(params.input.chain.explorerApiUrl) &&
+    (Boolean(params.input.apiKey) || params.input.chain.explorerApiStyle === "okx-xlayer");
+  if (!canUseExplorerIndex) {
+    throw new Error("Explorer API is not configured");
+  }
+  params.input.onProgress?.(
+    `通过 Explorer 钱包交易索引筛选 OKX Router 交易，区块 ${params.startBlock}-${params.endBlock}...`,
+  );
+  const hashes = await fetchAddressOkxHashes({
+    chain: params.input.chain,
+    address: params.address,
+    startBlock: params.startBlock,
+    endBlock: params.endBlock,
+    apiKey: params.input.apiKey || "__server__",
+    serviceAccessPassword: params.input.serviceAccessPassword,
+    serviceAccessSecret: params.input.serviceAccessSecret,
+  });
+  params.input.onProgress?.(`Explorer 钱包索引完成：${hashes.length} 个候选 OKX hash`);
+  return { hashes, source: "explorer" };
+}
+
+function prefersExplorerIndex(chain: ChainConfig): boolean {
+  return chain.explorerApiStyle === "okx-xlayer";
 }
 
 function rpcFallbackStatusFor(input: CalculateInput, startBlock: number, endBlock: number): { enabled: boolean; reason: string } {
@@ -674,3 +748,7 @@ function parseBoostMultiplier(value: string | undefined): number {
   const parsed = Number(normalized);
   return parsed > 10 ? 1 + parsed / 100 : parsed;
 }
+
+export const calculatorTestHelpers = {
+  mergeMultiChainResults,
+};

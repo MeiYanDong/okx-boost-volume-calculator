@@ -9,5 +9,6 @@
     "strict": true,
     "noEmit": true
   },
-  "include": ["server/**/*.ts", "src/lib/**/*.ts"]
+  "include": ["server/**/*.ts", "src/lib/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }

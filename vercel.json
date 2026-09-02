@@ -6,6 +6,9 @@
     "api/feishu.mjs": {
       "maxDuration": 300
     },
+    "api/feishu-sync.mjs": {
+      "maxDuration": 300
+    },
     "api/cron/daily-refresh.mjs": {
       "maxDuration": 300
     }

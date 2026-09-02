@@ -1,4 +1,5 @@
 import { getServerArchive, isArchiveStoreConfigured, normalizeWorkspaceId, setServerArchive } from "./archiveStore.mjs";
+import { syncFeishuBaseFromArchive } from "./feishuBaseSync.mjs";
 import { readJsonBody, requestUrl, sendJson, validateAccess } from "./proxy.mjs";
 import { getSupabaseUserFromRequest, getUserArchive, saveUserArchive } from "./supabaseStore.mjs";
 
@@ -30,10 +31,21 @@ export async function handleArchiveApi(request, response, config, env = process.
     const archive = sanitizeArchive(body);
     if (auth) {
       const saved = await saveUserArchive(env, auth.user, archive);
+      const feishuSync = await syncFeishuArchiveSafely(env, {
+        workspaceId: saved.workspaceId,
+        ownerEmail: auth.user.email || "",
+        archive: saved.archive,
+      });
       sendJson(
         response,
         200,
-        { ok: true, provider: "supabase", workspaceId: saved.workspaceId, archive: saved.archive },
+        {
+          ok: true,
+          provider: "supabase",
+          workspaceId: saved.workspaceId,
+          archive: saved.archive,
+          feishuSync,
+        },
         { "cache-control": "no-store" },
       );
       return;
@@ -51,6 +63,20 @@ export async function handleArchiveApi(request, response, config, env = process.
   }
 
   sendJson(response, 405, { error: "Use GET or POST" }, { "cache-control": "no-store" });
+}
+
+async function syncFeishuArchiveSafely(env, payload) {
+  try {
+    return await syncFeishuBaseFromArchive(env, {
+      ...payload,
+      trigger: "archive-save",
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: errorMessage(error),
+    };
+  }
 }
 
 export function sanitizeArchive(input) {
@@ -111,6 +137,10 @@ function isUtcDate(value) {
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function headerValue(headers, name) {

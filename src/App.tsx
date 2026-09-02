@@ -27,7 +27,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
-import { CHAINS, chainById, isAddress, normalizeAddress } from "./lib/chains";
+import { activeChainsFromValue, chainById, isAddress, isStableToken, normalizeAddress } from "./lib/chains";
 import { buildUtcWindow, calculateBoostVolumeAcrossChains, latestSelectableUtcDate } from "./lib/calculator";
 import { formatNumber, formatUsd, shortHash } from "./lib/format";
 import { repriceCalculationResult } from "./lib/reprice";
@@ -63,6 +63,7 @@ const SAMPLE_WALLET = "";
 const LEGACY_SAMPLE_WALLET = "0x35217ad88c31db4c95e67b77e68795ea4d54cc30";
 const SERVER_MANAGED_EXPLORER_API_KEY = "__server__";
 const SERVER_MANAGED_ANKR_RPC_URL = "/api/ankr";
+const ACTIVE_SCAN_CHAINS = activeChainsFromValue(import.meta.env.VITE_ACTIVE_CHAINS);
 const ACCESS_HEADER = "x-okx-boost-access";
 const WORKSPACE_HEADER = "x-okx-boost-workspace";
 const DEFAULT_DATA_SPACE = "default";
@@ -74,6 +75,7 @@ const DEFAULT_TEN_DAY_TARGET = "5000";
 const MAX_SCAN_HISTORY_RECORDS = 200;
 const ADDRESS_PATTERN = /0x[a-fA-F0-9]{40}/g;
 const SNAPSHOT_CONFIRM_TIME_LABEL = "08:00";
+const LEGACY_OKX_SWAP_FEE_RATE = 0.004;
 
 type RunState = "idle" | "running" | "done" | "error";
 type ArchiveSource = "empty" | "archive" | "fresh";
@@ -96,6 +98,17 @@ type NotifyState = {
 type ArchiveSyncState = {
   status: "idle" | "loading" | "saving" | "synced" | "error";
   message: string;
+};
+type FeishuBaseSyncResult = {
+  ok?: boolean;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+  rows?: number;
+  created?: number;
+  updated?: number;
+  unchanged?: number;
+  warnings?: string[];
 };
 type AuthRequestState = {
   status: "idle" | "loading" | "ready" | "error";
@@ -478,16 +491,12 @@ export default function App() {
         tenDayTarget,
         boostOverrides,
         dataSpace,
-        records: [],
+        records,
         scanHistory,
         accessPassword,
         authSession,
       }).then((result) => {
-        setArchiveSyncState(
-          result.ok
-            ? { status: "synced", message: "已同步到 Supabase 云端" }
-            : { status: "error", message: result.error || "Supabase 云端归档同步失败" },
-        );
+        setArchiveSyncState(archiveSyncStateForResult(result, "已同步到 Supabase 云端"));
       });
     }, 1200);
     return () => window.clearTimeout(timer);
@@ -656,7 +665,7 @@ export default function App() {
       const computed = await calculateBoostVolumeAcrossChains({
         address: normalizedAddress,
         endDate,
-        chains: CHAINS,
+        chains: ACTIVE_SCAN_CHAINS,
         apiKey: SERVER_MANAGED_EXPLORER_API_KEY,
         ankrMultichainRpcUrl: SERVER_MANAGED_ANKR_RPC_URL,
         boostBonuses: {},
@@ -773,11 +782,7 @@ export default function App() {
       accessPassword,
       authSession,
     }).then((result) => {
-      setArchiveSyncState(
-        result.ok
-          ? { status: "synced", message: "已写入 Supabase 云端" }
-          : { status: "error", message: result.error || "归档写入失败" },
-      );
+      setArchiveSyncState(archiveSyncStateForResult(result, "已写入 Supabase 云端"));
     });
   }
 
@@ -989,6 +994,7 @@ export default function App() {
             scanHistoryCount={scanHistoryRows.length}
             accessPassword={accessPassword}
             authSession={authSession}
+            snapshotDate={endDate}
             onTenDayTargetChange={setTenDayTarget}
             onAccessPasswordChange={setAccessPassword}
           />
@@ -2283,6 +2289,7 @@ function SettingsPage({
   scanHistoryCount,
   accessPassword,
   authSession,
+  snapshotDate,
   onTenDayTargetChange,
   onAccessPasswordChange,
 }: {
@@ -2292,6 +2299,7 @@ function SettingsPage({
   scanHistoryCount: number;
   accessPassword: string;
   authSession: AuthSession | null;
+  snapshotDate: string;
   onTenDayTargetChange: (value: string) => void;
   onAccessPasswordChange: (value: string) => void;
 }) {
@@ -2314,6 +2322,7 @@ function SettingsPage({
   const [feishuWebhook, setFeishuWebhook] = useState("");
   const [feishuSecret, setFeishuSecret] = useState("");
   const [notifyFutureDays, setNotifyFutureDays] = useState("3");
+  const [pendingFeishuRebuildDate, setPendingFeishuRebuildDate] = useState("");
   const isAdminSession = authSession?.user.role === "admin" && authSession.user.status !== "disabled";
   const adminAuth = { session: isAdminSession ? authSession : null, accessPassword };
   const adminReady = isAdminSession || Boolean(accessPassword.trim());
@@ -2414,6 +2423,70 @@ function SettingsPage({
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
       setNotificationState({ status: "ready", message: "真实数据测试已发送。" });
+    } catch (caught) {
+      setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function connectFeishuBaseSync() {
+    if (!authSession || notificationBusy) {
+      setNotificationState({ status: "error", message: "请先登录管理员账号。" });
+      return;
+    }
+    if (!isAdminSession) {
+      setNotificationState({ status: "error", message: "只有管理员账号可以连接飞书多维表格同步。" });
+      return;
+    }
+    setNotificationState({ status: "loading", message: "正在创建飞书授权链接..." });
+    try {
+      const response = await fetch("/api/feishu-oauth-start", {
+        headers: authHeaders(authSession),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { authorizationUrl?: string; error?: string };
+      if (!response.ok || !payload.authorizationUrl) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      window.location.assign(payload.authorizationUrl);
+      setNotificationState({ status: "ready", message: "正在跳转到飞书多维表格授权页..." });
+    } catch (caught) {
+      setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
+    }
+  }
+
+  async function rebuildFeishuSnapshot() {
+    if (!authSession || notificationBusy || !isAdminSession) {
+      setNotificationState({ status: "error", message: "只有管理员账号可以重建飞书快照。" });
+      return;
+    }
+    if (pendingFeishuRebuildDate !== snapshotDate) {
+      setPendingFeishuRebuildDate(snapshotDate);
+      setNotificationState({
+        status: "ready",
+        message: `将删除飞书 ${snapshotDate} 的旧记录并按当前归档重建，请再次点击确认。`,
+      });
+      return;
+    }
+    setPendingFeishuRebuildDate("");
+    setNotificationState({ status: "loading", message: `正在重建飞书 ${snapshotDate} 数据...` });
+    try {
+      const response = await fetch(`/api/feishu-sync?rebuildDate=${encodeURIComponent(snapshotDate)}`, {
+        method: "POST",
+        headers: authHeaders(authSession),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+        deleted?: number;
+        created?: number;
+        expectedBoostVolume?: number;
+        warnings?: string[];
+      };
+      if (!response.ok) throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+      if (payload.warnings?.length) throw new Error(payload.warnings.join("、"));
+      setNotificationState({
+        status: "ready",
+        message: `已删除 ${payload.deleted || 0} 行并重建 ${payload.created || 0} 行；预计 Boost ${formatUsd(payload.expectedBoostVolume)}。`,
+      });
     } catch (caught) {
       setNotificationState({ status: "error", message: caught instanceof Error ? caught.message : String(caught) });
     }
@@ -2690,6 +2763,17 @@ function SettingsPage({
             </button>
             <button type="button" onClick={refreshNotificationSettings} disabled={!authSession || notificationBusy}>
               刷新配置
+            </button>
+            <button type="button" onClick={connectFeishuBaseSync} disabled={!authSession || notificationBusy || !isAdminSession}>
+              连接飞书多维表格同步
+            </button>
+            <button
+              type="button"
+              className="danger-action"
+              onClick={rebuildFeishuSnapshot}
+              disabled={!authSession || notificationBusy || !isAdminSession || !isUtcDate(snapshotDate)}
+            >
+              {pendingFeishuRebuildDate === snapshotDate ? `确认重建 ${snapshotDate}` : "重建当前快照飞书数据"}
             </button>
             <button type="button" className="danger-action" onClick={clearNotificationSettings} disabled={!authSession || notificationBusy}>
               清除配置
@@ -2990,6 +3074,10 @@ function WalletDetailDrawer({
   const warnings = visibleWarnings(result.warnings);
   const countedSwaps = result.swaps.filter((swap) => swap.status === "counted");
   const partialSwaps = result.swaps.filter((swap) => swap.status === "partial");
+  const wearUsdValues = result.swaps
+    .map(swapWearUsdForDisplay)
+    .filter((value): value is number => value !== undefined);
+  const totalWearUsd = wearUsdValues.length ? wearUsdValues.reduce((sum, value) => sum + value, 0) : undefined;
   const maxDailyBoost = Math.max(1, ...result.dailyRows.map((row) => row.boostVolume));
   const detailTabs: Array<{ id: DetailTab; label: string; meta: string }> = [
     { id: "daily", label: "每日数据", meta: `${result.dailyRows.length} 天` },
@@ -3178,7 +3266,9 @@ function WalletDetailDrawer({
                     有效 {countedSwaps.length} · 部分 {partialSwaps.length} · 全部 {result.swaps.length}
                   </span>
                 </div>
-                <strong>{formatUsd(result.totalTradeUsd, true)}</strong>
+                <strong>
+                  成交 {formatUsd(result.totalTradeUsd, true)} · 磨损 {formatUsd(totalWearUsd, true)}
+                </strong>
               </div>
               <div className="table-scroll detail-table-scroll" role="region" aria-label="交易明细表格" tabIndex={0}>
                 <table className="compact-table tx-table">
@@ -3189,6 +3279,7 @@ function WalletDetailDrawer({
                       <th>状态</th>
                       <th>交易对</th>
                       <th>成交额</th>
+                      <th>磨损</th>
                       <th>倍数</th>
                       <th>Boost</th>
                     </tr>
@@ -3215,6 +3306,10 @@ function WalletDetailDrawer({
                           <small>{swap.usdBasis}</small>
                         </td>
                         <td>
+                          {formatUsd(swapWearUsdForDisplay(swap), true)}
+                          <small>{swapWearBasisLabel(swap)}</small>
+                        </td>
+                        <td>
                           {formatNumber(swap.baseMultiplier, 2)}×
                           <small>额外 {formatBonusPercent(swap.bonusMultiplier)}</small>
                         </td>
@@ -3226,7 +3321,7 @@ function WalletDetailDrawer({
                     ))}
                     {result.swaps.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="empty-row">
+                        <td colSpan={8} className="empty-row">
                           没有解析到窗口内的 OKX Boost 交易
                         </td>
                       </tr>
@@ -3757,6 +3852,54 @@ function explorerTxUrlForSwap(swap: ParsedSwap): string {
   return swap.explorerTxUrl || chainById(swap.chainId).explorerTxUrl;
 }
 
+function swapWearUsdForDisplay(swap: ParsedSwap): number | undefined {
+  if (swap.wearUsd !== undefined) return swap.wearUsd;
+  const chain = chainById(swap.chainId);
+  if (swap.feeAmount !== undefined && isStableToken(chain, swap.outputToken.address)) return swap.feeAmount;
+  if (isStableToken(chain, swap.inputToken.address) && !isStableToken(chain, swap.outputToken.address)) {
+    return roundUsdAmount(swap.inputAmount * LEGACY_OKX_SWAP_FEE_RATE);
+  }
+  if (isStableToken(chain, swap.inputToken.address) && isStableToken(chain, swap.outputToken.address)) {
+    return Math.max(0, swap.inputAmount - swap.outputAmount);
+  }
+  if (isStableToken(chain, swap.outputToken.address)) return 0;
+  return undefined;
+}
+
+function swapWearBasisLabel(swap: ParsedSwap): string {
+  if (swap.wearBasis) return swap.wearBasis;
+  const chain = chainById(swap.chainId);
+  if (swap.feeAmount !== undefined) return `${formatNumber(swap.feeAmount, 6)} ${swap.outputToken.symbol} 费用`;
+  if (isStableToken(chain, swap.inputToken.address) && !isStableToken(chain, swap.outputToken.address)) {
+    return `${swap.inputToken.symbol} 输入费用`;
+  }
+  if (isStableToken(chain, swap.inputToken.address) && isStableToken(chain, swap.outputToken.address)) {
+    return `${swap.inputToken.symbol} 输入 - ${swap.outputToken.symbol} 净输出`;
+  }
+  if (isStableToken(chain, swap.outputToken.address)) return `${swap.outputToken.symbol} 路由费用`;
+  return "无可换算磨损";
+}
+
+function withLegacyWearFields(result: CalculationResult): CalculationResult {
+  return {
+    ...result,
+    swaps: result.swaps.map((swap) => {
+      if (swap.wearUsd !== undefined) return swap;
+      const wearUsd = swapWearUsdForDisplay(swap);
+      if (wearUsd === undefined) return swap;
+      return {
+        ...swap,
+        wearUsd,
+        wearBasis: swapWearBasisLabel(swap),
+      };
+    }),
+  };
+}
+
+function roundUsdAmount(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
 function parseScopedBonusRules(raw: string): ScopedBonusRules {
   const rules: ScopedBonusRules = { scoped: {}, global: {} };
   for (const line of raw.split(/\n|,/)) {
@@ -4098,7 +4241,7 @@ async function syncServerArchive(params: {
   scanHistory: ScanHistoryRecord[];
   accessPassword: string;
   authSession: AuthSession | null;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<{ ok: boolean; error?: string; feishuSync?: FeishuBaseSyncResult }> {
   const payload: ServerArchivePayload = {
     workspaceId: params.dataSpace,
     walletsText: params.walletsText,
@@ -4110,7 +4253,7 @@ async function syncServerArchive(params: {
       name: record.name,
       state: record.state,
       source: record.source,
-      result: record.result,
+      result: record.result ? withLegacyWearFields(record.result) : null,
       progress: record.progress,
       error: record.error,
       savedAt: record.savedAt,
@@ -4128,11 +4271,37 @@ async function syncServerArchive(params: {
       const errorPayload = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(errorPayload.error || `HTTP ${response.status}`);
     }
-    return { ok: true };
+    const responsePayload = (await response.json().catch(() => ({}))) as { feishuSync?: FeishuBaseSyncResult };
+    return { ok: true, feishuSync: responsePayload.feishuSync };
   } catch (caught) {
     const error = caught instanceof Error ? caught.message : String(caught);
     return { ok: false, error };
   }
+}
+
+function archiveSyncStateForResult(
+  result: { ok: boolean; error?: string; feishuSync?: FeishuBaseSyncResult },
+  successMessage: string,
+): ArchiveSyncState {
+  if (!result.ok) return { status: "error", message: result.error || "Supabase 云端归档同步失败" };
+  const feishuMessage = feishuSyncMessage(result.feishuSync);
+  if (feishuMessage) return { status: "error", message: `${successMessage}；${feishuMessage}` };
+  return { status: "synced", message: successMessage };
+}
+
+function feishuSyncMessage(sync?: FeishuBaseSyncResult): string {
+  if (!sync) return "";
+  if (sync.ok === false) return `飞书未同步：${sync.error || "同步失败"}`;
+  if (sync.skipped) return `飞书未同步：${feishuSkipReasonLabel(sync.reason)}`;
+  if (sync.warnings?.length) return `飞书已同步，警告：${sync.warnings.slice(0, 2).join("、")}`;
+  return "";
+}
+
+function feishuSkipReasonLabel(reason?: string): string {
+  if (reason === "feishu_credentials_missing") return "生产环境缺少 FEISHU_APP_ID / FEISHU_APP_SECRET";
+  if (reason === "feishu_sync_disabled") return "同步开关已关闭";
+  if (reason === "workspace_not_allowed") return "当前 workspace 不在允许同步范围内";
+  return reason || "未知原因";
 }
 
 function archiveAccessHeaders(

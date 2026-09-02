@@ -236,7 +236,7 @@ export async function hasActiveAdminProfile(env = process.env) {
 export async function isAdminAuth(request, env = process.env) {
   const auth = await getSupabaseUserFromRequest(request, env).catch(() => null);
   const profile = auth?.profile || null;
-  return Boolean(profile?.role === "admin" && profile?.status === "active") ? auth : null;
+  return profile?.role === "admin" && profile?.status === "active" ? auth : null;
 }
 
 export async function redeemInvite(input, env = process.env) {
@@ -309,11 +309,12 @@ export async function saveUserArchive(env, user, archive) {
   return saveWorkspaceArchive(env, workspace.id, archive);
 }
 
-export async function listSupabaseWorkspaceIds(env = process.env) {
+export async function listSupabaseWorkspaceIds(env = process.env, options = {}) {
   if (!isSupabaseConfigured(env)) return [];
   const profiles = await restSelect(env, "app_profiles", {
     status: "eq.active",
-    select: "id",
+    ...(options.adminOnly ? { role: "eq.admin" } : {}),
+    select: "id,role",
   });
   const ownerIds = profiles.map((profile) => String(profile.id || "")).filter(Boolean);
   if (!ownerIds.length) return [];
@@ -325,13 +326,14 @@ export async function listSupabaseWorkspaceIds(env = process.env) {
   return rows.map((row) => String(row.id || "")).filter(Boolean);
 }
 
-export async function getSupabaseWorkspaceArchive(env, workspaceId) {
+export async function getSupabaseWorkspaceArchive(env, workspaceId, options = {}) {
   ensureSupabaseConfigured(env);
   const workspace = await getWorkspaceById(env, workspaceId);
   if (!workspace) return null;
-  await getActiveProfileForUser(env, workspace.owner_id);
+  const profile = await getActiveProfileForUser(env, workspace.owner_id);
+  if (options.adminOnly && profile.role !== "admin") return null;
   const archive = await buildArchiveFromWorkspace(env, workspace);
-  return { workspaceId: workspace.id, archive };
+  return { workspaceId: workspace.id, ownerEmail: String(profile.email || ""), archive };
 }
 
 export async function saveSupabaseWorkspaceArchive(env, workspaceId, archive) {
@@ -417,6 +419,50 @@ export async function getSupabaseWorkspaceNotificationTarget(env, workspaceId) {
   };
 }
 
+export async function getWorkspaceFeishuBaseOAuth(env, workspaceId) {
+  ensureSupabaseConfigured(env);
+  const workspace = await getWorkspaceById(env, workspaceId);
+  if (!workspace) return null;
+  const settings = isObject(workspace.settings) ? workspace.settings : {};
+  const oauth = isObject(settings.feishuBaseOAuth) ? settings.feishuBaseOAuth : null;
+  return oauth
+    ? {
+        workspaceId: workspace.id,
+        ownerId: workspace.owner_id,
+        oauth,
+      }
+    : null;
+}
+
+export async function saveWorkspaceFeishuBaseOAuth(env, workspaceId, oauth) {
+  ensureSupabaseConfigured(env);
+  const workspace = await getWorkspaceById(env, workspaceId);
+  if (!workspace) throw userError("Supabase workspace not found", 404);
+  const currentSettings = isObject(workspace.settings) ? workspace.settings : {};
+  const nextSettings = {
+    ...currentSettings,
+    feishuBaseOAuth: {
+      ...(isObject(currentSettings.feishuBaseOAuth) ? currentSettings.feishuBaseOAuth : {}),
+      ...oauth,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  await restPatch(env, "workspaces", { id: `eq.${workspace.id}` }, { settings: nextSettings });
+  return {
+    workspaceId: workspace.id,
+    ownerId: workspace.owner_id,
+    oauth: nextSettings.feishuBaseOAuth,
+  };
+}
+
+export async function getWorkspaceOAuthContext(env, workspaceId) {
+  ensureSupabaseConfigured(env);
+  const workspace = await getWorkspaceById(env, workspaceId);
+  if (!workspace) return null;
+  const profile = await getActiveProfileForUser(env, workspace.owner_id);
+  return { workspace, profile };
+}
+
 async function saveWorkspaceArchive(env, workspaceId, archive) {
   const workspace = await getWorkspaceById(env, workspaceId);
   if (!workspace) throw userError("Supabase workspace not found", 404);
@@ -427,9 +473,7 @@ async function saveWorkspaceArchive(env, workspaceId, archive) {
   const walletIdByAddress = new Map(walletRows.map((row) => [normalizeAddress(row.address), row.id]));
   await saveWorkspaceSettings(env, workspace.id, archive);
   await saveScanResults(env, workspace.id, walletIdByAddress, archive);
-  const savedWorkspace = await getWorkspaceById(env, workspace.id);
-  const savedArchive = await buildArchiveFromWorkspace(env, savedWorkspace || workspace);
-  return { workspaceId: workspace.id, archive: savedArchive };
+  return { workspaceId: workspace.id, archive };
 }
 
 async function buildArchiveFromWorkspace(env, workspace) {
@@ -548,8 +592,12 @@ async function syncWorkspaceWallets(env, workspaceId, entries) {
 }
 
 async function saveWorkspaceSettings(env, workspaceId, archive) {
+  const workspace = await getWorkspaceById(env, workspaceId);
+  if (!workspace) throw userError("Supabase workspace not found", 404);
+  const currentSettings = isObject(workspace.settings) ? workspace.settings : {};
   const tenDayTarget = parsePositiveNumber(archive.tenDayTarget) || defaultTenDayTarget;
   const settings = {
+    ...currentSettings,
     walletsText: String(archive.walletsText || ""),
     endDate: utcDateString(new Date()),
     boostOverrides: String(archive.boostOverrides || ""),
@@ -955,7 +1003,7 @@ async function fetchJson(url, init) {
     return payload;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Supabase request timed out after ${restTimeoutMs / 1000}s`);
+      throw new Error(`Supabase request timed out after ${restTimeoutMs / 1000}s`, { cause: error });
     }
     throw error;
   } finally {

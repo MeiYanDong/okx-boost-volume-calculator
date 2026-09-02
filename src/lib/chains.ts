@@ -102,6 +102,17 @@ export const X_LAYER_CHAIN: ChainConfig = {
 
 export const CHAINS = [BSC_CHAIN, X_LAYER_CHAIN];
 
+export const DEFAULT_ACTIVE_CHAIN_IDS: ChainId[] = ["xlayer"];
+
+export function activeChainsFromValue(value?: string): ChainConfig[] {
+  const requested = String(value || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item): item is ChainId => item === "bsc" || item === "xlayer");
+  const chainIds = requested.length ? [...new Set(requested)] : DEFAULT_ACTIVE_CHAIN_IDS;
+  return chainIds.map((chainId) => CHAINS.find((chain) => chain.id === chainId)).filter(Boolean) as ChainConfig[];
+}
+
 export function normalizeAddress(value: string): string {
   return value.trim().toLowerCase();
 }
